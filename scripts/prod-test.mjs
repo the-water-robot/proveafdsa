@@ -1,4 +1,5 @@
-// Test end-to-end contro l'app in produzione: health → crea sessione → preflight CORS → PUT reale → cleanup.
+// Test end-to-end contro l'app in produzione: health → crea sessione → PUT reale → controlla CORS → cleanup.
+// Verifica il CORS sulla RISPOSTA del PUT (ciò che il browser richiede davvero), non sul preflight.
 // Uso:  node scripts/prod-test.mjs [https://rec-to-share.vercel.app]
 import { OAuth2Client } from "google-auth-library";
 import { readFileSync } from "node:fs";
@@ -16,37 +17,29 @@ const log = (...a) => console.log(...a);
 const health = await (await fetch(`${BASE}/api/health`)).json();
 log("1) /api/health      →", JSON.stringify(health));
 
-// 2) richiedi una sessione di upload (crea anche la cartella della data)
+// 2) richiedi una sessione di upload (passando l'origin, come fa il browser)
 const d = new Date();
 const iso = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 const upRes = await fetch(`${BASE}/api/upload-url`, {
   method: "POST",
   headers: { "Content-Type": "application/json" },
-  body: JSON.stringify({ rehearsalDate: iso, fileName: "__deploy_test.txt", mimeType: "text/plain", label: "deploy-test" }),
+  body: JSON.stringify({ rehearsalDate: iso, fileName: "__deploy_test.txt", mimeType: "text/plain", label: "deploy-test", origin: BASE }),
 });
 const up = await upRes.json();
 log("2) /api/upload-url  →", upRes.status, JSON.stringify({ folder: up.folderName, hasSession: !!up.sessionUrl, err: up.error }));
 if (!up.sessionUrl) process.exit(1);
 
-// 3) preflight CORS, come farebbe il browser del telefono
-const pf = await fetch(up.sessionUrl, {
-  method: "OPTIONS",
-  headers: { Origin: BASE, "Access-Control-Request-Method": "PUT", "Access-Control-Request-Headers": "content-type" },
-});
-log("3) CORS preflight   →", pf.status,
-  "| Allow-Origin:", pf.headers.get("access-control-allow-origin") || "(nessuno)",
-  "| Allow-Methods:", pf.headers.get("access-control-allow-methods") || "(nessuno)");
-
-// 4) PUT reale dei byte
+// 3) PUT reale con header Origin (come il browser); leggo l'ACAO SULLA RISPOSTA del PUT
 const putRes = await fetch(up.sessionUrl, {
   method: "PUT",
-  headers: { "Content-Type": "text/plain" },
+  headers: { "Content-Type": "text/plain", Origin: BASE },
   body: `deploy test ${new Date().toISOString()}`,
 });
+const putACAO = putRes.headers.get("access-control-allow-origin");
 const put = await putRes.json().catch(() => ({}));
-log("4) PUT (upload)     →", putRes.status, "| fileId:", put.id || "(nessuno)");
+log("3) PUT (upload)     →", putRes.status, "| fileId:", put.id || "(nessuno)", "| CORS ACAO:", putACAO || "(nessuno)");
 
-// 5) cleanup: cancella il file di test (la cartella della data la lasciamo)
+// 4) cleanup: cancella il file di test
 const client = new OAuth2Client(env.GOOGLE_CLIENT_ID, env.GOOGLE_CLIENT_SECRET);
 client.setCredentials({ refresh_token: env.GOOGLE_REFRESH_TOKEN });
 const { token } = await client.getAccessToken();
@@ -55,9 +48,9 @@ if (put.id) {
     method: "DELETE",
     headers: { Authorization: `Bearer ${token}` },
   });
-  log("5) cleanup file     →", del.status === 204 ? "cancellato ✓" : `HTTP ${del.status}`);
+  log("4) cleanup file     →", del.status === 204 ? "cancellato ✓" : `HTTP ${del.status}`);
 }
 
 const ok = health.ok && up.sessionUrl && putRes.status >= 200 && putRes.status < 300;
-const corsOk = !!pf.headers.get("access-control-allow-origin");
-log(`\n${ok ? "✅" : "❌"} Pipeline upload: ${ok ? "FUNZIONA" : "PROBLEMA"} | CORS browser: ${corsOk ? "OK ✓" : "DA VERIFICARE"}`);
+const corsOk = !!putACAO;
+log(`\n${ok ? "✅" : "❌"} Pipeline upload: ${ok ? "FUNZIONA" : "PROBLEMA"} | CORS browser: ${corsOk ? "OK ✓" : "BLOCCATO ✗"}`);

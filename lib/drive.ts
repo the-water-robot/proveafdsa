@@ -91,15 +91,20 @@ export async function createResumableSession(
   folderId: string,
   fileName: string,
   mimeType: string,
+  origin?: string,
 ): Promise<string> {
   const token = await accessToken();
+  const headers: Record<string, string> = {
+    Authorization: `Bearer ${token}`,
+    "Content-Type": "application/json; charset=UTF-8",
+    "X-Upload-Content-Type": mimeType || "application/octet-stream",
+  };
+  // Inoltrare l'Origin del browser fa sì che Google restituisca gli header CORS sul PUT
+  // successivo: senza, l'upload diretto dal browser viene bloccato dalla CORS policy.
+  if (origin) headers.Origin = origin;
   const res = await fetch(`${UPLOAD}/files?uploadType=resumable&supportsAllDrives=true`, {
     method: "POST",
-    headers: {
-      Authorization: `Bearer ${token}`,
-      "Content-Type": "application/json; charset=UTF-8",
-      "X-Upload-Content-Type": mimeType || "application/octet-stream",
-    },
+    headers,
     body: JSON.stringify({ name: fileName, parents: [folderId] }),
   });
   if (!res.ok) {

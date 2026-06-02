@@ -18,7 +18,11 @@ export async function requestUploadSession(params: {
   const res = await fetch("/api/upload-url", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(params),
+    body: JSON.stringify({
+      ...params,
+      // l'origine serve al server per abilitare il CORS sull'upload diretto a Google
+      origin: typeof window !== "undefined" ? window.location.origin : undefined,
+    }),
   });
   if (!res.ok) {
     let msg = `Errore ${res.status}`;

@@ -19,11 +19,16 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "fileName mancante." }, { status: 400 });
     }
 
+    // Origine del browser: necessaria perché Google abiliti il CORS sul PUT diretto.
+    const origin =
+      (typeof body?.origin === "string" && body.origin) || req.headers.get("origin") || undefined;
+
     const folder = await ensureSessionFolder(rehearsalDate);
     const sessionUrl = await createResumableSession(
       folder.id,
       fileName,
       typeof mimeType === "string" ? mimeType : "application/octet-stream",
+      origin,
     );
 
     return NextResponse.json({
