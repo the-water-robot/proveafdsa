@@ -1,5 +1,7 @@
 # Prove — Gli Animali Fantastici del Sud America
 
+**🔗 [rec-to-share.vercel.app](https://rec-to-share.vercel.app)** · repo `the-water-robot/rec-to-share` (auto-deploy su ogni push)
+
 App mobile (PWA) per caricare **al volo le registrazioni delle prove** della band su una cartella
 Google Drive condivisa. Chi suona apre il link, registra o sceglie un file, preme *Carica* → fatto.
 **Nessun login per chi carica.**
@@ -42,16 +44,16 @@ npm run get-token                      # accedi col tuo account → copia il tok
 Incolla il valore in `.env.local` alla voce `GOOGLE_REFRESH_TOKEN`.
 
 ### 3. Repo su GitHub
-Crea un repo **vuoto** `the-water-robot/prove-afdsa`, poi dalla cartella del progetto:
+Crea un repo **vuoto** `the-water-robot/rec-to-share`, poi dalla cartella del progetto:
 ```bash
 git init && git add -A && git commit -m "Prove AFdSA"
 git branch -M main
-git remote add origin git@github.com:the-water-robot/prove-afdsa.git
+git remote add origin git@github.com:the-water-robot/rec-to-share.git
 git push -u origin main
 ```
 
 ### 4. Deploy su Vercel
-1. [vercel.com/new](https://vercel.com/new) → importa `the-water-robot/prove-afdsa` (autodetect Next.js).
+1. [vercel.com/new](https://vercel.com/new) → importa `the-water-robot/rec-to-share` (autodetect Next.js).
 2. **Environment Variables** → aggiungi:
 
    | Nome | Valore |
