@@ -27,6 +27,7 @@ export default function AudioPlayer({ tracks }: { tracks: AudioFile[] }) {
   const [time, setTime] = useState(0);
   const [dur, setDur] = useState(0);
   const [failed, setFailed] = useState<Set<string>>(new Set());
+  const [loop, setLoop] = useState(false);
 
   const current = index >= 0 && index < tracks.length ? tracks[index] : null;
 
@@ -69,6 +70,7 @@ export default function AudioPlayer({ tracks }: { tracks: AudioFile[] }) {
     <div className="flex flex-col gap-3">
       <audio
         ref={audioRef}
+        loop={loop}
         onTimeUpdate={(e) => setTime(e.currentTarget.currentTime)}
         onLoadedMetadata={(e) => setDur(e.currentTarget.duration)}
         onEnded={onEnded}
@@ -134,33 +136,49 @@ export default function AudioPlayer({ tracks }: { tracks: AudioFile[] }) {
       </ol>
 
       {current && (
-        <div className="card sticky bottom-[calc(4rem+env(safe-area-inset-bottom))] z-10 flex items-center justify-center gap-8 p-3">
+        <div className="card sticky bottom-[calc(4rem+env(safe-area-inset-bottom))] z-10 flex items-center justify-between p-3">
           <button
             type="button"
-            onClick={() => index > 0 && setIndex(index - 1)}
-            disabled={index <= 0}
-            className="text-sand transition disabled:opacity-30"
-            aria-label="Precedente"
+            onClick={() => setLoop((v) => !v)}
+            aria-pressed={loop}
+            aria-label={loop ? "Ripeti traccia: attivo" : "Ripeti traccia"}
+            className={`flex h-9 w-9 items-center justify-center rounded-full transition ${
+              loop ? "bg-sky/20 text-sky ring-1 ring-sky/40" : "text-sand/40 hover:text-sand/70"
+            }`}
           >
-            <PrevGlyph />
+            <LoopGlyph />
           </button>
-          <button
-            type="button"
-            onClick={togglePlay}
-            className="flex h-12 w-12 items-center justify-center rounded-full bg-gradient-to-br from-flamingo to-tangerine text-white shadow-lg"
-            aria-label="Play/Pausa"
-          >
-            {playing ? <PauseGlyph big /> : <PlayGlyph big />}
-          </button>
-          <button
-            type="button"
-            onClick={() => index < tracks.length - 1 && setIndex(index + 1)}
-            disabled={index >= tracks.length - 1}
-            className="text-sand transition disabled:opacity-30"
-            aria-label="Successivo"
-          >
-            <NextGlyph />
-          </button>
+
+          <div className="flex items-center gap-8">
+            <button
+              type="button"
+              onClick={() => index > 0 && setIndex(index - 1)}
+              disabled={index <= 0}
+              className="text-sand transition disabled:opacity-30"
+              aria-label="Precedente"
+            >
+              <PrevGlyph />
+            </button>
+            <button
+              type="button"
+              onClick={togglePlay}
+              className="flex h-12 w-12 items-center justify-center rounded-full bg-gradient-to-br from-flamingo to-tangerine text-white shadow-lg"
+              aria-label="Play/Pausa"
+            >
+              {playing ? <PauseGlyph big /> : <PlayGlyph big />}
+            </button>
+            <button
+              type="button"
+              onClick={() => index < tracks.length - 1 && setIndex(index + 1)}
+              disabled={index >= tracks.length - 1}
+              className="text-sand transition disabled:opacity-30"
+              aria-label="Successivo"
+            >
+              <NextGlyph />
+            </button>
+          </div>
+
+          <div className="w-9" aria-hidden />
         </div>
       )}
     </div>
@@ -186,6 +204,16 @@ function DownloadGlyph() {
   return (
     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
       <path d="M12 3v12" /><path d="m7 10 5 5 5-5" /><path d="M5 21h14" />
+    </svg>
+  );
+}
+function LoopGlyph() {
+  return (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="m17 2 4 4-4 4" />
+      <path d="M3 11v-1a4 4 0 0 1 4-4h14" />
+      <path d="m7 22-4-4 4-4" />
+      <path d="M21 13v1a4 4 0 0 1-4 4H3" />
     </svg>
   );
 }
