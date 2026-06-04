@@ -150,7 +150,7 @@ export async function listRehearsalFolders(): Promise<DriveFolder[]> {
   const res = await driveFetch(token, url);
   if (!res.ok) throw new Error(`Drive (lista cartelle) ${res.status}: ${await res.text()}`);
   const j = (await res.json()) as { files?: DriveFolder[] };
-  return j.files ?? [];
+  return (j.files ?? []).filter((f) => /^\d{4} \d{2} \d{2}$/.test(f.name));
 }
 
 /** File audio dentro una cartella, in ordine cronologico (l'orario è in testa al nome). */
