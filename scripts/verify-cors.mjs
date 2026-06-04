@@ -1,11 +1,11 @@
 // Attende che il deploy con il fix CORS sia live e lo verifica:
 // chiama l'app in produzione, fa un PUT con Origin e controlla che la risposta porti l'header CORS.
 // Esegue il polling perché l'auto-deploy da GitHub impiega ~1-2 min.
-// Uso:  node scripts/verify-cors.mjs [https://rec-to-share.vercel.app]
+// Uso:  node scripts/verify-cors.mjs [https://proveafdsa.vercel.app]
 import { OAuth2Client } from "google-auth-library";
 import { readFileSync } from "node:fs";
 
-const BASE = process.argv[2] || "https://rec-to-share.vercel.app";
+const BASE = process.argv[2] || "https://proveafdsa.vercel.app";
 const env = {};
 for (const line of readFileSync(new URL("../.env.local", import.meta.url), "utf8").split("\n")) {
   const m = line.match(/^\s*([A-Z0-9_]+)\s*=\s*(.*)\s*$/);

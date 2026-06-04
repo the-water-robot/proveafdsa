@@ -1,10 +1,10 @@
 // Test end-to-end contro l'app in produzione: health → crea sessione → PUT reale → controlla CORS → cleanup.
 // Verifica il CORS sulla RISPOSTA del PUT (ciò che il browser richiede davvero), non sul preflight.
-// Uso:  node scripts/prod-test.mjs [https://rec-to-share.vercel.app]
+// Uso:  node scripts/prod-test.mjs [https://proveafdsa.vercel.app]
 import { OAuth2Client } from "google-auth-library";
 import { readFileSync } from "node:fs";
 
-const BASE = process.argv[2] || "https://rec-to-share.vercel.app";
+const BASE = process.argv[2] || "https://proveafdsa.vercel.app";
 
 const env = {};
 for (const line of readFileSync(new URL("../.env.local", import.meta.url), "utf8").split("\n")) {
