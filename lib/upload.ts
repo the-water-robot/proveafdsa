@@ -13,6 +13,7 @@ export async function requestUploadSession(params: {
   rehearsalDate: string;
   fileName: string;
   mimeType: string;
+  subfolder?: string;
   pin?: string;
 }): Promise<UploadSession> {
   const res = await fetch("/api/upload-url", {
@@ -60,13 +61,14 @@ export function putResumable(
 
 /** Flusso completo per un singolo file. */
 export async function uploadOne(
-  params: { rehearsalDate: string; fileName: string; file: Blob; pin?: string },
+  params: { rehearsalDate: string; fileName: string; file: Blob; subfolder?: string; pin?: string },
   onProgress?: (fraction: number) => void,
 ): Promise<UploadSession> {
   const session = await requestUploadSession({
     rehearsalDate: params.rehearsalDate,
     fileName: params.fileName,
     mimeType: params.file.type || "application/octet-stream",
+    subfolder: params.subfolder,
     pin: params.pin,
   });
   await putResumable(session.sessionUrl, params.file, onProgress);

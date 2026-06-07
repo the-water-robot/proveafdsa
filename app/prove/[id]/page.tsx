@@ -4,8 +4,9 @@ import { Suspense, useEffect, useState } from "react";
 import { useParams, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import AudioPlayer from "@/components/AudioPlayer";
+import MediaGrid from "@/components/MediaGrid";
 import MetaCard from "@/components/MetaCard";
-import { fetchFiles, fetchMeta, type AudioFile } from "@/lib/library";
+import { fetchFiles, fetchMedia, fetchMeta, type AudioFile, type MediaFile } from "@/lib/library";
 import { defaultMeta, type ProvaMeta } from "@/lib/band";
 
 export default function Page() {
@@ -23,6 +24,7 @@ function ProvaDetail() {
   const name = search.get("d") || "Prova";
 
   const [files, setFiles] = useState<AudioFile[] | null>(null);
+  const [media, setMedia] = useState<MediaFile[] | null>(null);
   const [meta, setMeta] = useState<ProvaMeta | null>(null);
   const [pinProtected, setPinProtected] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -38,6 +40,9 @@ function ProvaDetail() {
     fetchMeta(id)
       .then(setMeta)
       .catch(() => setMeta(defaultMeta()));
+    fetchMedia(id)
+      .then(setMedia)
+      .catch(() => setMedia([]));
     fetch("/api/health")
       .then((r) => r.json())
       .then((h) => setPinProtected(!!h.pinProtected))
@@ -70,6 +75,13 @@ function ProvaDetail() {
           <AudioPlayer tracks={files} />
         )}
       </section>
+
+      {media && media.length > 0 && (
+        <section className="flex flex-col gap-2">
+          <h2 className="px-1 text-sm font-semibold text-sand/70">Foto & Video</h2>
+          <MediaGrid files={media} />
+        </section>
+      )}
     </main>
   );
 }

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { ensureSessionFolder, createResumableSession } from "@/lib/drive";
+import { ensureSessionFolder, ensureSubfolder, createResumableSession } from "@/lib/drive";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -14,7 +14,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Codice di accesso errato." }, { status: 401 });
     }
 
-    const { rehearsalDate, fileName, mimeType } = body ?? {};
+    const { rehearsalDate, fileName, mimeType, subfolder } = body ?? {};
     if (!fileName || typeof fileName !== "string") {
       return NextResponse.json({ error: "fileName mancante." }, { status: 400 });
     }
@@ -24,8 +24,12 @@ export async function POST(req: NextRequest) {
       (typeof body?.origin === "string" && body.origin) || req.headers.get("origin") || undefined;
 
     const folder = await ensureSessionFolder(rehearsalDate);
+    let targetFolderId = folder.id;
+    if (typeof subfolder === "string" && subfolder) {
+      targetFolderId = await ensureSubfolder(folder.id, subfolder);
+    }
     const sessionUrl = await createResumableSession(
-      folder.id,
+      targetFolderId,
       fileName,
       typeof mimeType === "string" ? mimeType : "application/octet-stream",
       origin,

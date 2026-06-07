@@ -13,6 +13,13 @@ export interface AudioFile {
   mimeType: string;
   size: number;
 }
+export interface MediaFile {
+  id: string;
+  name: string;
+  mimeType: string;
+  size: number;
+  subfolder: "video" | "foto";
+}
 
 async function fetchRetry(input: string, init?: RequestInit, attempts = 3): Promise<Response> {
   let lastRes: Response | null = null;
@@ -63,6 +70,10 @@ export async function saveMeta(folder: string, meta: ProvaMeta, pin?: string): P
     body: JSON.stringify({ folder, meta, pin }),
   });
   return (await jsonOrThrow(res)).meta;
+}
+
+export async function fetchMedia(folder: string): Promise<MediaFile[]> {
+  return (await jsonOrThrow(await fetchRetry(`/api/media?folder=${encodeURIComponent(folder)}`))).files;
 }
 
 export function streamUrl(id: string, download = false): string {
