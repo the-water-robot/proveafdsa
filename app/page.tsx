@@ -23,6 +23,7 @@ interface QueueItem {
   size: number;
   status: Status;
   progress: number; // 0..1
+  subfolder?: string; // "video" | "foto" | undefined (audio → cartella radice)
   error?: string;
   link?: string;
 }
@@ -69,6 +70,8 @@ export default function Home() {
   }, [pin]);
 
   const addBlob = useCallback((file: Blob, base: string, ext: string) => {
+    const type = file.type || "";
+    const subfolder = type.startsWith("video/") ? "video" : type.startsWith("image/") ? "foto" : undefined;
     setItems((prev) => [
       ...prev,
       {
@@ -80,6 +83,7 @@ export default function Home() {
         size: file.size,
         status: "ready",
         progress: 0,
+        subfolder,
       },
     ]);
     setFolderLink(null);
@@ -87,7 +91,11 @@ export default function Home() {
   }, []);
 
   const onRecorded = useCallback(
-    (blob: Blob) => addBlob(blob, "prova", extFromMime(blob.type || "audio/webm")),
+    (blob: Blob) => {
+      const type = blob.type || "";
+      const base = type.startsWith("video/") ? "video" : type.startsWith("image/") ? "foto" : "prova";
+      addBlob(blob, base, extFromMime(type || "audio/webm"));
+    },
     [addBlob],
   );
 
@@ -144,7 +152,7 @@ export default function Home() {
       patch(item.id, { status: "uploading", progress: 0, error: undefined });
       try {
         const session = await uploadOne(
-          { rehearsalDate: date, fileName: nameFor(item), file: item.file, pin },
+          { rehearsalDate: date, fileName: nameFor(item), file: item.file, subfolder: item.subfolder, pin },
           (frac) => patch(item.id, { progress: frac }),
         );
         patch(item.id, { status: "done", progress: 1, link: session.folderWebViewLink });

@@ -138,6 +138,13 @@ export interface AudioFile {
   mimeType: string;
   size: number;
 }
+export interface MediaFile {
+  id: string;
+  name: string;
+  mimeType: string;
+  size: number;
+  subfolder: "video" | "foto";
+}
 
 /** Sottocartelle-prova dentro DRIVE_FOLDER_ID, dalla più recente. */
 export async function listRehearsalFolders(): Promise<DriveFolder[]> {
@@ -188,6 +195,69 @@ async function findFileByName(token: string, folderId: string, name: string): Pr
   if (!res.ok) throw new Error(`Drive (ricerca file) ${res.status}: ${await res.text()}`);
   const j = (await res.json()) as { files?: { id: string }[] };
   return j.files && j.files.length ? j.files[0].id : null;
+}
+
+/** Garantisce che esista una sottocartella (es. "video" o "foto") dentro la cartella-prova. */
+export async function ensureSubfolder(parentId: string, subName: string): Promise<string> {
+  const token = await accessToken();
+  const q =
+    `name = '${subName.replace(/'/g, "\\'")}' and '${parentId}' in parents ` +
+    `and mimeType = '${FOLDER_MIME}' and trashed = false`;
+  const listRes = await driveFetch(
+    token,
+    `${DRIVE}/files?q=${encodeURIComponent(q)}&fields=files(id)&pageSize=1` +
+      `&supportsAllDrives=true&includeItemsFromAllDrives=true`,
+  );
+  if (!listRes.ok) throw new Error(`Drive (ricerca sottocartella) ${listRes.status}: ${await listRes.text()}`);
+  const listJson = (await listRes.json()) as { files?: { id: string }[] };
+  if (listJson.files?.length) return listJson.files[0].id;
+
+  const createRes = await driveFetch(
+    token,
+    `${DRIVE}/files?fields=id&supportsAllDrives=true`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: subName, mimeType: FOLDER_MIME, parents: [parentId] }),
+    },
+  );
+  if (!createRes.ok) throw new Error(`Drive (crea sottocartella) ${createRes.status}: ${await createRes.text()}`);
+  return ((await createRes.json()) as { id: string }).id;
+}
+
+/** File media (video + foto) nelle sottocartelle di una cartella-prova. */
+export async function listMediaFiles(sessionFolderId: string): Promise<MediaFile[]> {
+  const token = await accessToken();
+  const q =
+    `'${sessionFolderId}' in parents and mimeType = '${FOLDER_MIME}' ` +
+    `and (name = 'video' or name = 'foto') and trashed = false`;
+  const subRes = await driveFetch(
+    token,
+    `${DRIVE}/files?q=${encodeURIComponent(q)}&fields=files(id,name)` +
+      `&supportsAllDrives=true&includeItemsFromAllDrives=true`,
+  );
+  if (!subRes.ok) return [];
+  const subJson = (await subRes.json()) as { files?: { id: string; name: string }[] };
+
+  const results: MediaFile[] = [];
+  for (const sub of subJson.files ?? []) {
+    const subfolder = sub.name as "video" | "foto";
+    const mimeFilter = subfolder === "video" ? "mimeType contains 'video/'" : "mimeType contains 'image/'";
+    const q2 = `'${sub.id}' in parents and trashed = false and ${mimeFilter}`;
+    const filesRes = await driveFetch(
+      token,
+      `${DRIVE}/files?q=${encodeURIComponent(q2)}&fields=files(id,name,mimeType,size)&orderBy=name` +
+        `&pageSize=200&supportsAllDrives=true&includeItemsFromAllDrives=true`,
+    );
+    if (!filesRes.ok) continue;
+    const filesJson = (await filesRes.json()) as {
+      files?: { id: string; name: string; mimeType: string; size?: string }[];
+    };
+    for (const f of filesJson.files ?? []) {
+      results.push({ id: f.id, name: f.name, mimeType: f.mimeType, size: Number(f.size ?? 0), subfolder });
+    }
+  }
+  return results;
 }
 
 /** Legge i metadati della prova (_prova.json). Se manca, ritorna i default. */
