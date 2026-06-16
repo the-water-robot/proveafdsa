@@ -79,11 +79,24 @@ function VideoCard({ file }: { file: MediaFile }) {
 function ShareButton({ file }: { file: MediaFile }) {
   const [busy, setBusy] = useState(false);
 
-  async function share() {
+  // WebM non è supportato da Instagram: facciamo il download diretto
+  const isWebm = file.mimeType.startsWith("video/webm");
+
+  async function handleClick() {
     setBusy(true);
     try {
       const res = await fetch(streamUrl(file.id));
       const blob = await res.blob();
+
+      if (isWebm) {
+        // Download diretto: l'utente dovrà caricare dalla galleria
+        const a = document.createElement("a");
+        a.href = URL.createObjectURL(blob);
+        a.download = file.name;
+        a.click();
+        return;
+      }
+
       const f = new File([blob], file.name, { type: file.mimeType });
       if (typeof navigator.share === "function") {
         await navigator.share({ files: [f], title: file.name });
@@ -103,14 +116,16 @@ function ShareButton({ file }: { file: MediaFile }) {
   return (
     <button
       type="button"
-      onClick={share}
+      onClick={handleClick}
       disabled={busy}
-      title="Condividi"
-      aria-label="Condividi"
+      title={isWebm ? "Scarica (WebM non supportato da Instagram)" : "Condividi"}
+      aria-label={isWebm ? "Scarica" : "Condividi"}
       className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-dark-bg/80 text-sand/60 transition hover:text-sand active:scale-95 disabled:opacity-40"
     >
       {busy ? (
         <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-sand/30 border-t-sand" />
+      ) : isWebm ? (
+        <DownloadIcon />
       ) : (
         <ShareIcon />
       )}
@@ -126,6 +141,16 @@ function ShareIcon() {
       <circle cx="18" cy="19" r="3" />
       <line x1="8.59" y1="13.51" x2="15.42" y2="17.49" />
       <line x1="15.41" y1="6.51" x2="8.59" y2="10.49" />
+    </svg>
+  );
+}
+
+function DownloadIcon() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+      <polyline points="7 10 12 15 17 10" />
+      <line x1="12" y1="15" x2="12" y2="3" />
     </svg>
   );
 }

@@ -16,7 +16,7 @@ function pickAudioMime(): string {
 
 function pickVideoMime(): string {
   if (typeof MediaRecorder === "undefined") return "";
-  for (const c of ["video/webm;codecs=vp9,opus", "video/webm;codecs=vp8,opus", "video/webm", "video/mp4"]) {
+  for (const c of ["video/mp4", "video/webm;codecs=vp9,opus", "video/webm;codecs=vp8,opus", "video/webm"]) {
     try { if (MediaRecorder.isTypeSupported(c)) return c; } catch { /* ignora */ }
   }
   return "";
