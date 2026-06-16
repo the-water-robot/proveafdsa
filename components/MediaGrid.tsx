@@ -77,21 +77,21 @@ function VideoCard({ file }: { file: MediaFile }) {
 }
 
 function ShareButton({ file }: { file: MediaFile }) {
+  const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
 
-  async function share() {
+  async function shareFile() {
+    setOpen(false);
     setBusy(true);
     try {
+      const res = await fetch(streamUrl(file.id));
+      const blob = await res.blob();
+      const f = new File([blob], file.name, { type: file.mimeType });
       if (typeof navigator.share === "function") {
-        // Scarica il file e lo passa alla share sheet nativa (iOS/Android → sceglie Instagram)
-        const res = await fetch(streamUrl(file.id));
-        const blob = await res.blob();
-        const f = new File([blob], file.name, { type: file.mimeType });
         await navigator.share({ files: [f], title: file.name });
       } else {
-        // Fallback desktop: scarica il file
         const a = document.createElement("a");
-        a.href = streamUrl(file.id, true);
+        a.href = URL.createObjectURL(blob);
         a.download = file.name;
         a.click();
       }
@@ -103,20 +103,47 @@ function ShareButton({ file }: { file: MediaFile }) {
   }
 
   return (
-    <button
-      type="button"
-      onClick={share}
-      disabled={busy}
-      title="Condividi (Instagram, WhatsApp, …)"
-      aria-label="Condividi"
-      className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-dark-bg/80 text-sand/60 transition hover:text-sand active:scale-95 disabled:opacity-40"
-    >
-      {busy ? (
-        <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-sand/30 border-t-sand" />
-      ) : (
-        <ShareIcon />
+    <div className="relative">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        disabled={busy}
+        title="Condividi"
+        aria-label="Condividi"
+        className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-dark-bg/80 text-sand/60 transition hover:text-sand active:scale-95 disabled:opacity-40"
+      >
+        {busy ? (
+          <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-sand/30 border-t-sand" />
+        ) : (
+          <ShareIcon />
+        )}
+      </button>
+
+      {open && (
+        <>
+          <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
+          <div className="absolute bottom-full right-0 z-50 mb-2 min-w-[175px] overflow-hidden rounded-2xl border border-white/10 bg-[#1c1a18] shadow-2xl">
+            <button
+              type="button"
+              onClick={shareFile}
+              className="flex w-full items-center gap-3 px-4 py-3 text-left text-sm text-sand transition hover:bg-white/5 active:bg-white/10"
+            >
+              <StoryIcon />
+              Storia Instagram
+            </button>
+            <div className="mx-4 h-px bg-white/8" />
+            <button
+              type="button"
+              onClick={shareFile}
+              className="flex w-full items-center gap-3 px-4 py-3 text-left text-sm text-sand transition hover:bg-white/5 active:bg-white/10"
+            >
+              <PostIcon />
+              Post Instagram
+            </button>
+          </div>
+        </>
       )}
-    </button>
+    </div>
   );
 }
 
@@ -128,6 +155,27 @@ function ShareIcon() {
       <circle cx="18" cy="19" r="3" />
       <line x1="8.59" y1="13.51" x2="15.42" y2="17.49" />
       <line x1="15.41" y1="6.51" x2="8.59" y2="10.49" />
+    </svg>
+  );
+}
+
+function StoryIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="2" y="2" width="20" height="20" rx="5" ry="5" />
+      <circle cx="12" cy="12" r="4" />
+    </svg>
+  );
+}
+
+function PostIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="3" y="3" width="18" height="18" rx="2" />
+      <line x1="3" y1="9" x2="21" y2="9" />
+      <line x1="3" y1="15" x2="21" y2="15" />
+      <line x1="9" y1="3" x2="9" y2="21" />
+      <line x1="15" y1="3" x2="15" y2="21" />
     </svg>
   );
 }
