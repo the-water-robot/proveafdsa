@@ -303,17 +303,21 @@ export default function Recorder({ onRecorded }: { onRecorded: (blob: Blob) => v
     <>
       {/* Overlay fullscreen */}
       {fullscreen && mode !== "audio" && (
-        <div ref={fsOverlayRef} className="fixed inset-0 z-50 bg-black flex flex-col">
+        <div
+          ref={fsOverlayRef}
+          className="fixed left-0 top-0 z-50 w-screen bg-black"
+          style={{ height: "100dvh" }}
+        >
           <video
             ref={setPreview}
             autoPlay
             muted
             playsInline
-            className="flex-1 w-full object-cover"
+            className="absolute inset-0 h-full w-full object-cover"
           />
           {/* Indicatore REC */}
           {recording && (
-            <span className="absolute right-4 top-4 flex items-center gap-1.5 rounded-full bg-coral px-2.5 py-1 text-xs font-semibold text-white">
+            <span className="absolute right-4 top-safe flex items-center gap-1.5 rounded-full bg-coral px-2.5 py-1 text-xs font-semibold text-white" style={{ top: "max(16px, env(safe-area-inset-top))" }}>
               <span className="h-1.5 w-1.5 rounded-full bg-white animate-pulse" />
               {mmss(elapsed)}
             </span>
@@ -324,25 +328,28 @@ export default function Recorder({ onRecorded }: { onRecorded: (blob: Blob) => v
               type="button"
               onClick={flipCamera}
               aria-label="Cambia fotocamera"
-              className="absolute left-4 top-4 flex h-9 w-9 items-center justify-center rounded-full bg-black/40 text-white backdrop-blur-sm transition active:scale-90"
+              className="absolute left-4 flex h-9 w-9 items-center justify-center rounded-full bg-black/40 text-white backdrop-blur-sm transition active:scale-90"
+              style={{ top: "max(16px, env(safe-area-inset-top))" }}
             >
               <FlipCameraIcon />
             </button>
           )}
-          {/* Barra inferiore: esci + scatta */}
-          <div className="absolute bottom-0 left-0 right-0 pb-10 pt-4 flex items-center justify-center gap-12 bg-gradient-to-t from-black/70 to-transparent">
+          {/* Bottone indietro + scatto — flottanti senza gradiente */}
+          <div
+            className="absolute left-0 right-0 flex items-center justify-center gap-12"
+            style={{ bottom: "max(32px, env(safe-area-inset-bottom))" }}
+          >
             {!recording && (
               <button
                 type="button"
                 onClick={exitFullscreen}
                 aria-label="Esci da schermo intero"
-                className="flex h-10 w-10 items-center justify-center rounded-full bg-white/20 text-white backdrop-blur-sm transition active:scale-90"
+                className="flex h-10 w-10 items-center justify-center rounded-full bg-black/40 text-white backdrop-blur-sm transition active:scale-90"
               >
                 <CollapseIcon />
               </button>
             )}
             {captureBtn}
-            {/* spacer simmetrico */}
             {!recording && <div className="h-10 w-10" />}
           </div>
         </div>
@@ -367,11 +374,6 @@ export default function Recorder({ onRecorded }: { onRecorded: (blob: Blob) => v
                 playsInline
                 className="h-full w-full object-cover"
               />
-            )}
-            {fullscreen && (
-              <div className="absolute inset-0 flex items-center justify-center bg-black">
-                <p className="text-sm text-sand/40">Schermo intero attivo</p>
-              </div>
             )}
             {!cameraReady && !fullscreen && (
               <div className="absolute inset-0 flex items-center justify-center">
