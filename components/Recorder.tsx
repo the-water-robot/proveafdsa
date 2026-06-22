@@ -43,8 +43,51 @@ export default function Recorder({ onRecorded }: { onRecorded: (blob: Blob) => v
   const previewRef = useRef<HTMLVideoElement | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const touchX = useRef<number | null>(null);
+  const fsOverlayRef = useRef<HTMLDivElement | null>(null);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const wakeLockRef = useRef<any>(null);
+
+  useEffect(() => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    function onFsChange() {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      if (!document.fullscreenElement && !(document as any).webkitFullscreenElement) {
+        setFullscreen(false);
+      }
+    }
+    document.addEventListener("fullscreenchange", onFsChange);
+    document.addEventListener("webkitfullscreenchange", onFsChange);
+    return () => {
+      document.removeEventListener("fullscreenchange", onFsChange);
+      document.removeEventListener("webkitfullscreenchange", onFsChange);
+    };
+  }, []);
+
+  async function enterFullscreen() {
+    setFullscreen(true);
+    requestAnimationFrame(async () => {
+      const el = fsOverlayRef.current;
+      if (!el) return;
+      try {
+        if (el.requestFullscreen) await el.requestFullscreen();
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        else if ((el as any).webkitRequestFullscreen) (el as any).webkitRequestFullscreen();
+      } catch { /* browser non supporta */ }
+    });
+  }
+
+  async function exitFullscreen() {
+    setFullscreen(false);
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      if (document.fullscreenElement || (document as any).webkitFullscreenElement) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        if (document.exitFullscreen) await document.exitFullscreen();
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        else if ((document as any).webkitExitFullscreen) (document as any).webkitExitFullscreen();
+      }
+    } catch { /* ignora */ }
+  }
 
   async function acquireWakeLock() {
     try {
@@ -215,7 +258,7 @@ export default function Recorder({ onRecorded }: { onRecorded: (blob: Blob) => v
 
   async function handlePressFullscreen() {
     await handlePress();
-    if (mode === "foto") setFullscreen(false);
+    if (mode === "foto") await exitFullscreen();
   }
 
   const captureBtn = (
@@ -260,7 +303,7 @@ export default function Recorder({ onRecorded }: { onRecorded: (blob: Blob) => v
     <>
       {/* Overlay fullscreen */}
       {fullscreen && mode !== "audio" && (
-        <div className="fixed inset-0 z-50 bg-black flex flex-col">
+        <div ref={fsOverlayRef} className="fixed inset-0 z-50 bg-black flex flex-col">
           <video
             ref={setPreview}
             autoPlay
@@ -291,7 +334,7 @@ export default function Recorder({ onRecorded }: { onRecorded: (blob: Blob) => v
             {!recording && (
               <button
                 type="button"
-                onClick={() => setFullscreen(false)}
+                onClick={exitFullscreen}
                 aria-label="Esci da schermo intero"
                 className="flex h-10 w-10 items-center justify-center rounded-full bg-white/20 text-white backdrop-blur-sm transition active:scale-90"
               >
@@ -349,7 +392,7 @@ export default function Recorder({ onRecorded }: { onRecorded: (blob: Blob) => v
             {cameraReady && !recording && !fullscreen && (
               <button
                 type="button"
-                onClick={() => setFullscreen(true)}
+                onClick={enterFullscreen}
                 aria-label="Schermo intero"
                 className="absolute left-3 top-3 flex h-9 w-9 items-center justify-center rounded-full bg-black/40 text-white backdrop-blur-sm transition active:scale-90"
               >
