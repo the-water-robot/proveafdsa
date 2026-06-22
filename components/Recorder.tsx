@@ -35,6 +35,7 @@ export default function Recorder({ onRecorded }: { onRecorded: (blob: Blob) => v
   const [error, setError] = useState<string | null>(null);
   const [cameraReady, setCameraReady] = useState(false);
   const [facingMode, setFacingMode] = useState<"environment" | "user">("environment");
+  const [fullscreen, setFullscreen] = useState(false);
 
   const recRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
@@ -212,143 +213,223 @@ export default function Recorder({ onRecorded }: { onRecorded: (blob: Blob) => v
 
   const modeIdx = MODES.indexOf(mode);
 
-  return (
-    <div
-      className="flex w-full flex-col items-center gap-3 select-none"
-      onTouchStart={onTouchStart}
-      onTouchEnd={onTouchEnd}
+  async function handlePressFullscreen() {
+    await handlePress();
+    if (mode === "foto") setFullscreen(false);
+  }
+
+  const captureBtn = (
+    <button
+      type="button"
+      onClick={fullscreen ? handlePressFullscreen : handlePress}
+      className="relative flex h-28 w-28 items-center justify-center rounded-full transition active:scale-95"
+      aria-label={
+        mode === "foto"
+          ? "Scatta foto"
+          : recording
+          ? "Ferma registrazione"
+          : `Avvia registrazione ${MODE_LABEL[mode]}`
+      }
     >
-      {/* Anteprima camera (video/foto mode) */}
-      {mode !== "audio" && (
-        <div
-          className="relative w-full overflow-hidden rounded-xl bg-black"
-          style={{ aspectRatio: "4/3" }}
-        >
+      {recording && (
+        <span className="absolute inset-0 rounded-full bg-coral/40 animate-pulse-ring" />
+      )}
+      <span
+        className={`relative flex h-28 w-28 items-center justify-center rounded-full shadow-lg ${
+          recording
+            ? "bg-coral"
+            : mode === "foto"
+            ? "bg-gradient-to-br from-violet to-sky"
+            : "bg-gradient-to-br from-flamingo to-tangerine"
+        }`}
+      >
+        {recording ? (
+          <span className="h-8 w-8 rounded-md bg-white" />
+        ) : mode === "audio" ? (
+          <MicIcon />
+        ) : mode === "video" ? (
+          <VideoIcon />
+        ) : (
+          <CameraIcon />
+        )}
+      </span>
+    </button>
+  );
+
+  return (
+    <>
+      {/* Overlay fullscreen */}
+      {fullscreen && mode !== "audio" && (
+        <div className="fixed inset-0 z-50 bg-black flex flex-col">
           <video
             ref={setPreview}
             autoPlay
             muted
             playsInline
-            className="h-full w-full object-cover"
+            className="flex-1 w-full object-cover"
           />
-          {!cameraReady && (
-            <div className="absolute inset-0 flex items-center justify-center">
-              <p className="text-sm text-sand/50">Apertura fotocamera…</p>
-            </div>
+          {/* Indicatore REC */}
+          {recording && (
+            <span className="absolute right-4 top-4 flex items-center gap-1.5 rounded-full bg-coral px-2.5 py-1 text-xs font-semibold text-white">
+              <span className="h-1.5 w-1.5 rounded-full bg-white animate-pulse" />
+              {mmss(elapsed)}
+            </span>
           )}
+          {/* Flip camera */}
           {cameraReady && !recording && (
             <button
               type="button"
               onClick={flipCamera}
               aria-label="Cambia fotocamera"
-              className="absolute right-3 top-3 flex h-9 w-9 items-center justify-center rounded-full bg-black/40 text-white backdrop-blur-sm transition active:scale-90"
+              className="absolute left-4 top-4 flex h-9 w-9 items-center justify-center rounded-full bg-black/40 text-white backdrop-blur-sm transition active:scale-90"
             >
               <FlipCameraIcon />
             </button>
           )}
-          {recording && (
-            <span className="absolute right-3 top-3 flex items-center gap-1.5 rounded-full bg-coral px-2.5 py-1 text-xs font-semibold text-white">
-              <span className="h-1.5 w-1.5 rounded-full bg-white animate-pulse" />
-              {mmss(elapsed)}
-            </span>
-          )}
+          {/* Barra inferiore: esci + scatta */}
+          <div className="absolute bottom-0 left-0 right-0 pb-10 pt-4 flex items-center justify-center gap-12 bg-gradient-to-t from-black/70 to-transparent">
+            {!recording && (
+              <button
+                type="button"
+                onClick={() => setFullscreen(false)}
+                aria-label="Esci da schermo intero"
+                className="flex h-10 w-10 items-center justify-center rounded-full bg-white/20 text-white backdrop-blur-sm transition active:scale-90"
+              >
+                <CollapseIcon />
+              </button>
+            )}
+            {captureBtn}
+            {/* spacer simmetrico */}
+            {!recording && <div className="h-10 w-10" />}
+          </div>
         </div>
       )}
 
-      {/* Pulsante di registrazione / scatto */}
-      <button
-        type="button"
-        onClick={handlePress}
-        className="relative flex h-28 w-28 items-center justify-center rounded-full transition active:scale-95"
-        aria-label={
-          mode === "foto"
-            ? "Scatta foto"
-            : recording
-            ? "Ferma registrazione"
-            : `Avvia registrazione ${MODE_LABEL[mode]}`
-        }
+      <div
+        className="flex w-full flex-col items-center gap-3 select-none"
+        onTouchStart={onTouchStart}
+        onTouchEnd={onTouchEnd}
       >
-        {recording && (
-          <span className="absolute inset-0 rounded-full bg-coral/40 animate-pulse-ring" />
-        )}
-        <span
-          className={`relative flex h-28 w-28 items-center justify-center rounded-full shadow-lg ${
-            recording
-              ? "bg-coral"
-              : mode === "foto"
-              ? "bg-gradient-to-br from-violet to-sky"
-              : "bg-gradient-to-br from-flamingo to-tangerine"
-          }`}
-        >
-          {recording ? (
-            <span className="h-8 w-8 rounded-md bg-white" />
-          ) : mode === "audio" ? (
-            <MicIcon />
-          ) : mode === "video" ? (
-            <VideoIcon />
-          ) : (
-            <CameraIcon />
-          )}
-        </span>
-      </button>
-
-      {/* Testo stato */}
-      <div className="text-center">
-        {recording ? (
-          <>
-            {mode === "audio" && (
-              <p className="font-mono text-xl tabular-nums text-coral">{mmss(elapsed)}</p>
-            )}
-            <p className="text-xs text-sand/50">Tocca di nuovo per fermare</p>
-          </>
-        ) : (
-          <p className="text-sm font-medium text-sand/80">
-            {mode === "foto" ? "Tocca per scattare" : "Tocca per registrare"}
-          </p>
-        )}
-      </div>
-
-      {/* Selettore modo: frecce + dot + etichette */}
-      <div className="flex items-center gap-3">
-        <button
-          type="button"
-          onClick={() => cycleMode(-1)}
-          className="p-1 text-sand/40 transition hover:text-sand"
-          aria-label="Modalità precedente"
-        >
-          <ChevronLeftIcon />
-        </button>
-        <div className="flex items-end gap-4">
-          {MODES.map((m, i) => (
-            <button
-              key={m}
-              type="button"
-              onClick={() => !recording && (setMode(m), setError(null))}
-              className={`flex flex-col items-center gap-1 transition ${
-                i === modeIdx ? "text-sand" : "text-sand/35 hover:text-sand/60"
-              }`}
-            >
-              <span
-                className={`rounded-full transition-all ${
-                  i === modeIdx ? "h-2 w-2 bg-sand" : "h-1.5 w-1.5 bg-sand/30"
-                }`}
+        {/* Anteprima camera (video/foto mode) */}
+        {mode !== "audio" && (
+          <div
+            className="relative w-full overflow-hidden rounded-xl bg-black"
+            style={{ aspectRatio: "4/3" }}
+          >
+            {!fullscreen && (
+              <video
+                ref={setPreview}
+                autoPlay
+                muted
+                playsInline
+                className="h-full w-full object-cover"
               />
-              <span className="text-[10px] font-medium">{MODE_LABEL[m]}</span>
-            </button>
-          ))}
-        </div>
-        <button
-          type="button"
-          onClick={() => cycleMode(1)}
-          className="p-1 text-sand/40 transition hover:text-sand"
-          aria-label="Modalità successiva"
-        >
-          <ChevronRightIcon />
-        </button>
-      </div>
+            )}
+            {fullscreen && (
+              <div className="absolute inset-0 flex items-center justify-center bg-black">
+                <p className="text-sm text-sand/40">Schermo intero attivo</p>
+              </div>
+            )}
+            {!cameraReady && !fullscreen && (
+              <div className="absolute inset-0 flex items-center justify-center">
+                <p className="text-sm text-sand/50">Apertura fotocamera…</p>
+              </div>
+            )}
+            {cameraReady && !recording && !fullscreen && (
+              <button
+                type="button"
+                onClick={flipCamera}
+                aria-label="Cambia fotocamera"
+                className="absolute right-3 top-3 flex h-9 w-9 items-center justify-center rounded-full bg-black/40 text-white backdrop-blur-sm transition active:scale-90"
+              >
+                <FlipCameraIcon />
+              </button>
+            )}
+            {/* Bottone fullscreen */}
+            {cameraReady && !recording && !fullscreen && (
+              <button
+                type="button"
+                onClick={() => setFullscreen(true)}
+                aria-label="Schermo intero"
+                className="absolute left-3 top-3 flex h-9 w-9 items-center justify-center rounded-full bg-black/40 text-white backdrop-blur-sm transition active:scale-90"
+              >
+                <ExpandIcon />
+              </button>
+            )}
+            {recording && !fullscreen && (
+              <span className="absolute right-3 top-3 flex items-center gap-1.5 rounded-full bg-coral px-2.5 py-1 text-xs font-semibold text-white">
+                <span className="h-1.5 w-1.5 rounded-full bg-white animate-pulse" />
+                {mmss(elapsed)}
+              </span>
+            )}
+          </div>
+        )}
 
-      {error && <p className="text-center text-sm text-coral px-4">{error}</p>}
-    </div>
+        {/* Pulsante di registrazione / scatto (normale, non fullscreen) */}
+        {!fullscreen && captureBtn}
+
+        {/* Testo stato */}
+        {!fullscreen && (
+          <div className="text-center">
+            {recording ? (
+              <>
+                {mode === "audio" && (
+                  <p className="font-mono text-xl tabular-nums text-coral">{mmss(elapsed)}</p>
+                )}
+                <p className="text-xs text-sand/50">Tocca di nuovo per fermare</p>
+              </>
+            ) : (
+              <p className="text-sm font-medium text-sand/80">
+                {mode === "foto" ? "Tocca per scattare" : "Tocca per registrare"}
+              </p>
+            )}
+          </div>
+        )}
+
+        {/* Selettore modo: frecce + dot + etichette */}
+        {!fullscreen && (
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              onClick={() => cycleMode(-1)}
+              className="p-1 text-sand/40 transition hover:text-sand"
+              aria-label="Modalità precedente"
+            >
+              <ChevronLeftIcon />
+            </button>
+            <div className="flex items-end gap-4">
+              {MODES.map((m, i) => (
+                <button
+                  key={m}
+                  type="button"
+                  onClick={() => !recording && (setMode(m), setError(null))}
+                  className={`flex flex-col items-center gap-1 transition ${
+                    i === modeIdx ? "text-sand" : "text-sand/35 hover:text-sand/60"
+                  }`}
+                >
+                  <span
+                    className={`rounded-full transition-all ${
+                      i === modeIdx ? "h-2 w-2 bg-sand" : "h-1.5 w-1.5 bg-sand/30"
+                    }`}
+                  />
+                  <span className="text-[10px] font-medium">{MODE_LABEL[m]}</span>
+                </button>
+              ))}
+            </div>
+            <button
+              type="button"
+              onClick={() => cycleMode(1)}
+              className="p-1 text-sand/40 transition hover:text-sand"
+              aria-label="Modalità successiva"
+            >
+              <ChevronRightIcon />
+            </button>
+          </div>
+        )}
+
+        {error && <p className="text-center text-sm text-coral px-4">{error}</p>}
+      </div>
+    </>
   );
 }
 
@@ -399,6 +480,28 @@ function FlipCameraIcon() {
       <path d="M20 7h-3a2 2 0 0 0-1.6.8L13 10H7a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-1" />
       <path d="M15 2l5 5-5 5" />
       <circle cx="11" cy="15" r="2" />
+    </svg>
+  );
+}
+
+function ExpandIcon() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <polyline points="15 3 21 3 21 9" />
+      <polyline points="9 21 3 21 3 15" />
+      <line x1="21" y1="3" x2="14" y2="10" />
+      <line x1="3" y1="21" x2="10" y2="14" />
+    </svg>
+  );
+}
+
+function CollapseIcon() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <polyline points="4 14 10 14 10 20" />
+      <polyline points="20 10 14 10 14 4" />
+      <line x1="10" y1="14" x2="3" y2="21" />
+      <line x1="21" y1="3" x2="14" y2="10" />
     </svg>
   );
 }
