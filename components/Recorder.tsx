@@ -305,52 +305,61 @@ export default function Recorder({ onRecorded }: { onRecorded: (blob: Blob) => v
       {fullscreen && mode !== "audio" && (
         <div
           ref={fsOverlayRef}
-          className="fixed left-0 top-0 z-50 w-screen bg-black"
-          style={{ height: "100dvh" }}
+          style={{ position: "fixed", inset: 0, zIndex: 50, background: "black", width: "100vw", height: "100dvh" }}
         >
+          {/* Video a tutto schermo */}
           <video
             ref={setPreview}
             autoPlay
             muted
             playsInline
-            className="absolute inset-0 h-full w-full object-cover"
+            style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover", zIndex: 1 }}
           />
-          {/* Indicatore REC */}
-          {recording && (
-            <span className="absolute right-4 top-safe flex items-center gap-1.5 rounded-full bg-coral px-2.5 py-1 text-xs font-semibold text-white" style={{ top: "max(16px, env(safe-area-inset-top))" }}>
-              <span className="h-1.5 w-1.5 rounded-full bg-white animate-pulse" />
-              {mmss(elapsed)}
-            </span>
-          )}
-          {/* Flip camera */}
-          {cameraReady && !recording && (
-            <button
-              type="button"
-              onClick={flipCamera}
-              aria-label="Cambia fotocamera"
-              className="absolute left-4 flex h-9 w-9 items-center justify-center rounded-full bg-black/40 text-white backdrop-blur-sm transition active:scale-90"
-              style={{ top: "max(16px, env(safe-area-inset-top))" }}
-            >
-              <FlipCameraIcon />
-            </button>
-          )}
-          {/* Bottone indietro + scatto — flottanti senza gradiente */}
+
+          {/* Barra superiore: indietro | REC / flip */}
           <div
-            className="absolute left-0 right-0 flex items-center justify-center gap-12"
-            style={{ bottom: "max(32px, env(safe-area-inset-bottom))" }}
+            style={{
+              position: "absolute", top: 0, left: 0, right: 0, zIndex: 2,
+              display: "flex", alignItems: "center", justifyContent: "space-between",
+              padding: "max(16px, env(safe-area-inset-top)) 16px 12px",
+            }}
           >
-            {!recording && (
+            {!recording ? (
               <button
                 type="button"
                 onClick={exitFullscreen}
-                aria-label="Esci da schermo intero"
-                className="flex h-10 w-10 items-center justify-center rounded-full bg-black/40 text-white backdrop-blur-sm transition active:scale-90"
+                aria-label="Indietro"
+                className="flex h-10 w-10 items-center justify-center rounded-full bg-black/50 text-white backdrop-blur-sm active:scale-90"
               >
                 <CollapseIcon />
               </button>
+            ) : (
+              <span className="flex items-center gap-1.5 rounded-full bg-coral px-2.5 py-1 text-xs font-semibold text-white">
+                <span className="h-1.5 w-1.5 rounded-full bg-white animate-pulse" />
+                {mmss(elapsed)}
+              </span>
             )}
+            {cameraReady && !recording && (
+              <button
+                type="button"
+                onClick={flipCamera}
+                aria-label="Cambia fotocamera"
+                className="flex h-10 w-10 items-center justify-center rounded-full bg-black/50 text-white backdrop-blur-sm active:scale-90"
+              >
+                <FlipCameraIcon />
+              </button>
+            )}
+          </div>
+
+          {/* Bottone scatto / stop — centrato in basso */}
+          <div
+            style={{
+              position: "absolute", bottom: 0, left: 0, right: 0, zIndex: 2,
+              display: "flex", justifyContent: "center",
+              paddingBottom: "max(40px, env(safe-area-inset-bottom))",
+            }}
+          >
             {captureBtn}
-            {!recording && <div className="h-10 w-10" />}
           </div>
         </div>
       )}
