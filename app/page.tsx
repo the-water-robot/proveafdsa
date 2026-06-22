@@ -171,6 +171,16 @@ export default function Home() {
   const pendingCount = items.filter((i) => i.status === "ready" || i.status === "error").length;
   const allDone = items.length > 0 && items.every((i) => i.status === "done");
 
+  // Dopo 2 secondi che tutto è caricato: azzera etichetta e rimuovi i file dalla lista
+  useEffect(() => {
+    if (!allDone) return;
+    const t = setTimeout(() => {
+      setLabel("");
+      setItems((prev) => prev.filter((i) => i.status !== "done"));
+    }, 2000);
+    return () => clearTimeout(t);
+  }, [allDone]);
+
   return (
     <main className="mx-auto flex min-h-[100dvh] max-w-md flex-col gap-5 px-4 pb-[calc(9rem+env(safe-area-inset-bottom))] pt-6">
       <header className="flex items-center gap-3">

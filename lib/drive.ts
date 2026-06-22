@@ -274,6 +274,28 @@ export async function readMeta(folderId: string): Promise<ProvaMeta> {
   }
 }
 
+/** Mette nel cestino un file Drive. */
+export async function deleteFile(fileId: string): Promise<void> {
+  const token = await accessToken();
+  const res = await driveFetch(token, `${DRIVE}/files/${fileId}?supportsAllDrives=true`, {
+    method: "DELETE",
+  });
+  if (!res.ok && res.status !== 204) {
+    throw new Error(`Drive (elimina) ${res.status}: ${await res.text()}`);
+  }
+}
+
+/** Rinomina un file Drive. */
+export async function renameFile(fileId: string, newName: string): Promise<void> {
+  const token = await accessToken();
+  const res = await driveFetch(token, `${DRIVE}/files/${fileId}?supportsAllDrives=true`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name: newName }),
+  });
+  if (!res.ok) throw new Error(`Drive (rinomina) ${res.status}: ${await res.text()}`);
+}
+
 /** Crea o aggiorna _prova.json dentro la cartella. */
 export async function writeMeta(folderId: string, meta: ProvaMeta): Promise<void> {
   const token = await accessToken();

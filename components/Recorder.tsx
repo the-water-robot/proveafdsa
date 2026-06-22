@@ -42,6 +42,21 @@ export default function Recorder({ onRecorded }: { onRecorded: (blob: Blob) => v
   const previewRef = useRef<HTMLVideoElement | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const touchX = useRef<number | null>(null);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const wakeLockRef = useRef<any>(null);
+
+  async function acquireWakeLock() {
+    try {
+      if ("wakeLock" in navigator) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        wakeLockRef.current = await (navigator as any).wakeLock.request("screen");
+      }
+    } catch { /* non supportato o permesso negato */ }
+  }
+  async function releaseWakeLock() {
+    try { await wakeLockRef.current?.release(); } catch { /* ignora */ }
+    wakeLockRef.current = null;
+  }
 
   useEffect(() => {
     if (mode === "audio") {
@@ -154,12 +169,14 @@ export default function Recorder({ onRecorded }: { onRecorded: (blob: Blob) => v
         const type = rec.mimeType || mime || (mode === "video" ? "video/webm" : "audio/webm");
         const blob = new Blob(chunksRef.current, { type });
         stopTimer();
+        releaseWakeLock();
         if (mode === "audio") stopStream();
         setRecording(false);
         setElapsed(0);
         if (blob.size > 0) onRecorded(blob);
       };
       rec.start();
+      acquireWakeLock();
       recRef.current = rec;
       setRecording(true);
       setElapsed(0);

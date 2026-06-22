@@ -20,7 +20,37 @@ function formatBytes(n: number): string {
   return `${(n / 1024 / 1024).toFixed(1)} MB`;
 }
 
-export default function AudioPlayer({ tracks }: { tracks: AudioFile[] }) {
+/* ─── WAV encoder ─── */
+function encodeWAV(buf: AudioBuffer, startSec: number, endSec: number): Blob {
+  const sr = buf.sampleRate;
+  const ch = buf.numberOfChannels;
+  const s0 = Math.max(0, Math.floor(startSec * sr));
+  const s1 = Math.min(buf.length, Math.floor(endSec * sr));
+  const n = Math.max(0, s1 - s0);
+  const dataSize = n * ch * 2;
+  const ab = new ArrayBuffer(44 + dataSize);
+  const v = new DataView(ab);
+  function str(off: number, s: string) { for (let i = 0; i < s.length; i++) v.setUint8(off + i, s.charCodeAt(i)); }
+  str(0, "RIFF"); v.setUint32(4, 36 + dataSize, true); str(8, "WAVE");
+  str(12, "fmt "); v.setUint32(16, 16, true); v.setUint16(20, 1, true);
+  v.setUint16(22, ch, true); v.setUint32(24, sr, true); v.setUint32(28, sr * ch * 2, true);
+  v.setUint16(32, ch * 2, true); v.setUint16(34, 16, true);
+  str(36, "data"); v.setUint32(40, dataSize, true);
+  let off = 44;
+  for (let i = 0; i < n; i++) {
+    for (let c = 0; c < ch; c++) {
+      const sample = Math.max(-1, Math.min(1, buf.getChannelData(c)[s0 + i]));
+      v.setInt16(off, sample < 0 ? sample * 0x8000 : sample * 0x7fff, true);
+      off += 2;
+    }
+  }
+  return new Blob([ab], { type: "audio/wav" });
+}
+
+/* ─── Componente principale ─── */
+
+export default function AudioPlayer({ tracks: initial }: { tracks: AudioFile[] }) {
+  const [tracks, setTracks] = useState<AudioFile[]>(initial);
   const audioRef = useRef<HTMLAudioElement>(null);
   const [index, setIndex] = useState(-1);
   const [playing, setPlaying] = useState(false);
@@ -29,16 +59,29 @@ export default function AudioPlayer({ tracks }: { tracks: AudioFile[] }) {
   const [failed, setFailed] = useState<Set<string>>(new Set());
   const [loop, setLoop] = useState(false);
 
+  /* edit state */
+  const [editId, setEditId] = useState<string | null>(null);
+  const [editName, setEditName] = useState("");
+  const [renameBusy, setRenameBusy] = useState(false);
+
+  /* trim state */
+  const [trimBuffer, setTrimBuffer] = useState<AudioBuffer | null>(null);
+  const [trimLoading, setTrimLoading] = useState(false);
+  const [trimStart, setTrimStart] = useState(0);
+  const [trimEnd, setTrimEnd] = useState(0);
+
+  /* delete confirm */
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  const [deleteBusy, setDeleteBusy] = useState(false);
+
   const current = index >= 0 && index < tracks.length ? tracks[index] : null;
 
-  // Cambio traccia → carica e prova a suonare (il primo play parte da un tap dell'utente).
   useEffect(() => {
     const a = audioRef.current;
     if (!a || !current) return;
     a.src = streamUrl(current.id);
     a.load();
-    setTime(0);
-    setDur(0);
+    setTime(0); setDur(0);
     a.play().then(() => setPlaying(true)).catch(() => setPlaying(false));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [index]);
@@ -60,6 +103,81 @@ export default function AudioPlayer({ tracks }: { tracks: AudioFile[] }) {
   function onError() {
     if (current) setFailed((s) => new Set(s).add(current.id));
     setPlaying(false);
+  }
+
+  /* ─── Delete ─── */
+  async function doDelete(id: string) {
+    setDeleteBusy(true);
+    try {
+      const res = await fetch(`/api/file?id=${id}`, { method: "DELETE" });
+      if (res.ok) {
+        const newTracks = tracks.filter((t) => t.id !== id);
+        setTracks(newTracks);
+        if (current?.id === id) {
+          const a = audioRef.current;
+          if (a) { a.pause(); a.src = ""; }
+          setPlaying(false);
+          setIndex(-1);
+        }
+      }
+    } finally {
+      setDeleteBusy(false);
+      setConfirmDeleteId(null);
+    }
+  }
+
+  /* ─── Rename ─── */
+  function openEdit(t: AudioFile) {
+    setEditId(t.id);
+    setEditName(splitNameExt(t.name).base);
+    setTrimBuffer(null);
+    setTrimLoading(false);
+    setConfirmDeleteId(null);
+  }
+  async function saveRename(id: string) {
+    const track = tracks.find((t) => t.id === id);
+    if (!track || !editName.trim()) { setEditId(null); return; }
+    const { ext } = splitNameExt(track.name);
+    const newName = ext ? `${editName.trim()}.${ext}` : editName.trim();
+    setRenameBusy(true);
+    try {
+      const res = await fetch(`/api/file?id=${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: newName }),
+      });
+      if (res.ok) setTracks((prev) => prev.map((t) => t.id === id ? { ...t, name: newName } : t));
+    } finally {
+      setRenameBusy(false);
+      setEditId(null);
+    }
+  }
+
+  /* ─── Trim ─── */
+  async function loadTrim(id: string) {
+    setTrimLoading(true);
+    setTrimBuffer(null);
+    try {
+      const res = await fetch(streamUrl(id));
+      const ab = await res.arrayBuffer();
+      const ctx = new AudioContext();
+      const buf = await ctx.decodeAudioData(ab);
+      setTrimBuffer(buf);
+      setTrimStart(0);
+      setTrimEnd(buf.duration);
+    } catch { /* formato non decodificabile */ }
+    finally { setTrimLoading(false); }
+  }
+  function downloadTrim(id: string) {
+    if (!trimBuffer) return;
+    const track = tracks.find((t) => t.id === id);
+    if (!track) return;
+    const wav = encodeWAV(trimBuffer, trimStart, Math.min(trimEnd, trimBuffer.duration));
+    const { base } = splitNameExt(track.name);
+    const url = URL.createObjectURL(wav);
+    const a = document.createElement("a");
+    a.href = url; a.download = `${base}-trim.wav`; a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 5000);
   }
 
   if (tracks.length === 0) {
@@ -85,8 +203,12 @@ export default function AudioPlayer({ tracks }: { tracks: AudioFile[] }) {
         {tracks.map((t, i) => {
           const active = i === index;
           const bad = failed.has(t.id);
+          const isEdit = editId === t.id;
+          const isConfirmDel = confirmDeleteId === t.id;
+
           return (
             <li key={t.id}>
+              {/* Riga principale */}
               <div className={`card flex items-center gap-3 p-3 ${active ? "ring-1 ring-flamingo/50" : ""}`}>
                 <button
                   type="button"
@@ -96,13 +218,15 @@ export default function AudioPlayer({ tracks }: { tracks: AudioFile[] }) {
                 >
                   {active && playing ? <PauseGlyph /> : <PlayGlyph />}
                 </button>
+
                 <button type="button" onClick={() => selectTrack(i)} className="min-w-0 flex-1 text-left">
                   <p className="truncate text-sm font-medium">{`${i + 1}. ${prettyName(t.name)}`}</p>
                   <p className="text-xs text-sand/50">
                     {active && dur ? `${mmss(time)} / ${mmss(dur)}` : formatBytes(t.size)}
-                    {bad && <span className="text-coral"> · non riproducibile qui, scarica ▾</span>}
+                    {bad && <span className="text-coral"> · non riproducibile, scarica ▾</span>}
                   </p>
                 </button>
+
                 <a
                   href={streamUrl(t.id, true)}
                   download
@@ -111,30 +235,157 @@ export default function AudioPlayer({ tracks }: { tracks: AudioFile[] }) {
                 >
                   <DownloadGlyph />
                 </a>
+                <button
+                  type="button"
+                  onClick={() => isEdit ? setEditId(null) : openEdit(t)}
+                  className={`shrink-0 rounded-full p-2 transition ${isEdit ? "text-sky" : "text-sand/40 hover:text-sand"}`}
+                  aria-label="Modifica"
+                >
+                  <PencilGlyph />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setConfirmDeleteId(isConfirmDel ? null : t.id)}
+                  className={`shrink-0 rounded-full p-2 transition ${isConfirmDel ? "text-coral" : "text-sand/40 hover:text-coral"}`}
+                  aria-label="Elimina"
+                >
+                  <TrashGlyph />
+                </button>
               </div>
+
+              {/* Slider playback */}
               {active && (
                 <input
-                  type="range"
-                  min={0}
-                  max={dur || 0}
-                  step={0.1}
-                  value={time}
+                  type="range" min={0} max={dur || 0} step={0.1} value={time}
                   onChange={(e) => {
-                    const a = audioRef.current;
-                    if (!a) return;
-                    const v = Number(e.target.value);
-                    a.currentTime = v;
-                    setTime(v);
+                    const a = audioRef.current; if (!a) return;
+                    const v = Number(e.target.value); a.currentTime = v; setTime(v);
                   }}
                   className="mt-1.5 w-full accent-flamingo"
                   aria-label="Avanzamento"
                 />
+              )}
+
+              {/* Conferma eliminazione */}
+              {isConfirmDel && (
+                <div className="mt-1 flex items-center gap-2 rounded-xl border border-coral/30 bg-coral/10 px-3 py-2.5">
+                  <p className="flex-1 text-xs text-sand/80">Eliminare questa registrazione?</p>
+                  <button
+                    type="button"
+                    onClick={() => doDelete(t.id)}
+                    disabled={deleteBusy}
+                    className="rounded-lg bg-coral/20 px-3 py-1.5 text-xs font-semibold text-coral disabled:opacity-40"
+                  >
+                    {deleteBusy ? "…" : "Sì, elimina"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setConfirmDeleteId(null)}
+                    className="text-xs text-sand/50"
+                  >
+                    No
+                  </button>
+                </div>
+              )}
+
+              {/* Pannello edit */}
+              {isEdit && (
+                <div className="mt-1 flex flex-col gap-3 rounded-xl border border-dark-border bg-dark-bg/60 px-3 py-3">
+                  {/* Rinomina */}
+                  <div>
+                    <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-wider text-sand/40">Rinomina</p>
+                    <div className="flex gap-2">
+                      <input
+                        autoFocus
+                        value={editName}
+                        onChange={(e) => setEditName(e.target.value)}
+                        onKeyDown={(e) => e.key === "Enter" && saveRename(t.id)}
+                        className="field flex-1 text-sm"
+                        placeholder="Nome file"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => saveRename(t.id)}
+                        disabled={renameBusy}
+                        className="shrink-0 rounded-xl bg-sky/20 px-3 py-2 text-sm font-semibold text-sky disabled:opacity-40"
+                      >
+                        {renameBusy ? "…" : "Salva"}
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Trim */}
+                  <div>
+                    <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-wider text-sand/40">Taglia</p>
+                    {!trimBuffer ? (
+                      <button
+                        type="button"
+                        onClick={() => loadTrim(t.id)}
+                        disabled={trimLoading}
+                        className="w-full rounded-xl border border-dark-border py-2 text-sm text-sand/60 transition hover:text-sand disabled:opacity-40"
+                      >
+                        {trimLoading ? "Carico audio…" : "Carica per tagliare"}
+                      </button>
+                    ) : (
+                      <div className="flex flex-col gap-2">
+                        <div className="grid grid-cols-2 gap-3">
+                          <label className="flex flex-col gap-1">
+                            <span className="text-xs text-sand/50">Da {mmss(trimStart)}</span>
+                            <input
+                              type="range"
+                              min={0}
+                              max={trimBuffer.duration}
+                              step={0.5}
+                              value={trimStart}
+                              onChange={(e) => {
+                                const v = Number(e.target.value);
+                                setTrimStart(v);
+                                if (v >= trimEnd) setTrimEnd(Math.min(trimBuffer.duration, v + 1));
+                              }}
+                              className="accent-flamingo"
+                            />
+                          </label>
+                          <label className="flex flex-col gap-1">
+                            <span className="text-xs text-sand/50">A {mmss(trimEnd)}</span>
+                            <input
+                              type="range"
+                              min={0}
+                              max={trimBuffer.duration}
+                              step={0.5}
+                              value={trimEnd}
+                              onChange={(e) => {
+                                const v = Number(e.target.value);
+                                setTrimEnd(v);
+                                if (v <= trimStart) setTrimStart(Math.max(0, v - 1));
+                              }}
+                              className="accent-flamingo"
+                            />
+                          </label>
+                        </div>
+                        <p className="text-center text-xs text-sand/50">
+                          Durata selezione: {mmss(Math.max(0, trimEnd - trimStart))}
+                        </p>
+                        <button
+                          type="button"
+                          onClick={() => downloadTrim(t.id)}
+                          className="w-full rounded-xl border border-sky/30 bg-sky/10 py-2 text-sm font-semibold text-sky transition hover:bg-sky/20"
+                        >
+                          Scarica ritaglio (.wav)
+                        </button>
+                        <p className="text-center text-[10px] text-sand/30">
+                          Il file WAV viene scaricato sul dispositivo. Puoi poi ricaricarlo via "Scegli file".
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                </div>
               )}
             </li>
           );
         })}
       </ol>
 
+      {/* Player bar fisso */}
       {current && (
         <div className="card sticky bottom-[calc(4rem+env(safe-area-inset-bottom))] z-10 flex items-center justify-between p-3">
           <button
@@ -185,7 +436,7 @@ export default function AudioPlayer({ tracks }: { tracks: AudioFile[] }) {
   );
 }
 
-/* glyphs */
+/* ─── Glyphs ─── */
 function PlayGlyph({ big }: { big?: boolean }) {
   const s = big ? 22 : 16;
   return <svg width={s} height={s} viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z" /></svg>;
@@ -207,13 +458,27 @@ function DownloadGlyph() {
     </svg>
   );
 }
+function PencilGlyph() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
+      <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
+    </svg>
+  );
+}
+function TrashGlyph() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <polyline points="3 6 5 6 21 6" /><path d="M19 6l-1 14H6L5 6" />
+      <path d="M10 11v6" /><path d="M14 11v6" /><path d="M9 6V4h6v2" />
+    </svg>
+  );
+}
 function LoopGlyph() {
   return (
     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <path d="m17 2 4 4-4 4" />
-      <path d="M3 11v-1a4 4 0 0 1 4-4h14" />
-      <path d="m7 22-4-4 4-4" />
-      <path d="M21 13v1a4 4 0 0 1-4 4H3" />
+      <path d="m17 2 4 4-4 4" /><path d="M3 11v-1a4 4 0 0 1 4-4h14" />
+      <path d="m7 22-4-4 4-4" /><path d="M21 13v1a4 4 0 0 1-4 4H3" />
     </svg>
   );
 }
