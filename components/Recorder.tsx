@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 
 type Mode = "audio" | "video" | "foto";
 const MODES: Mode[] = ["audio", "video", "foto"];
@@ -36,6 +37,8 @@ export default function Recorder({ onRecorded }: { onRecorded: (blob: Blob) => v
   const [cameraReady, setCameraReady] = useState(false);
   const [facingMode, setFacingMode] = useState<"environment" | "user">("environment");
   const [fullscreen, setFullscreen] = useState(false);
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
 
   const recRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
@@ -301,78 +304,76 @@ export default function Recorder({ onRecorded }: { onRecorded: (blob: Blob) => v
 
   return (
     <>
-      {/* Overlay fullscreen */}
-      {fullscreen && mode !== "audio" && (
+      {/* Overlay fullscreen — portal nel body, fuori da qualsiasi stacking context */}
+      {mounted && fullscreen && mode !== "audio" && createPortal(
         <div
           ref={fsOverlayRef}
           style={{
             position: "fixed", top: 0, left: 0, right: 0, bottom: 0,
-            zIndex: 50, background: "black",
-            display: "flex", flexDirection: "column",
+            zIndex: 9999, background: "black",
           }}
         >
-          {/* Area video — flex:1 prende tutto lo spazio disponibile */}
-          <div style={{ flex: 1, position: "relative", overflow: "hidden" }}>
-            <video
-              ref={setPreview}
-              autoPlay
-              muted
-              playsInline
-              style={{
-                position: "absolute", inset: 0,
-                width: "100%", height: "100%",
-                objectFit: "cover",
-                pointerEvents: "none", // non intercetta i tocchi
-              }}
-            />
-            {/* Barra superiore sovrapposta al video */}
-            <div
-              style={{
-                position: "absolute", top: 0, left: 0, right: 0,
-                display: "flex", alignItems: "center", justifyContent: "space-between",
-                padding: "max(14px, env(safe-area-inset-top)) 14px 10px",
-              }}
-            >
-              {!recording ? (
-                <button
-                  type="button"
-                  onClick={exitFullscreen}
-                  aria-label="Indietro"
-                  className="flex h-11 w-11 items-center justify-center rounded-full bg-black/50 text-white backdrop-blur-sm active:scale-90"
-                >
-                  <CollapseIcon />
-                </button>
-              ) : (
-                <span className="flex items-center gap-1.5 rounded-full bg-coral px-2.5 py-1 text-xs font-semibold text-white">
-                  <span className="h-1.5 w-1.5 rounded-full bg-white animate-pulse" />
-                  {mmss(elapsed)}
-                </span>
-              )}
-              {cameraReady && !recording && (
-                <button
-                  type="button"
-                  onClick={flipCamera}
-                  aria-label="Cambia fotocamera"
-                  className="flex h-11 w-11 items-center justify-center rounded-full bg-black/50 text-white backdrop-blur-sm active:scale-90"
-                >
-                  <FlipCameraIcon />
-                </button>
-              )}
-            </div>
-          </div>
+          {/* Video riempie tutto — pointer-events:none lascia passare i tocchi */}
+          <video
+            ref={setPreview}
+            autoPlay
+            muted
+            playsInline
+            style={{
+              position: "absolute", inset: 0,
+              width: "100%", height: "100%",
+              objectFit: "cover",
+              pointerEvents: "none",
+            }}
+          />
 
-          {/* Barra inferiore nel flusso normale — sempre visibile e toccabile */}
+          {/* Bottoni in cima */}
           <div
             style={{
-              background: "rgba(0,0,0,0.75)",
-              display: "flex", justifyContent: "center", alignItems: "center",
-              paddingTop: 20,
-              paddingBottom: "max(36px, env(safe-area-inset-bottom))",
+              position: "absolute", top: 0, left: 0, right: 0,
+              display: "flex", alignItems: "center", justifyContent: "space-between",
+              padding: "max(14px, env(safe-area-inset-top)) 14px 10px",
+            }}
+          >
+            {!recording ? (
+              <button
+                type="button"
+                onClick={exitFullscreen}
+                aria-label="Indietro"
+                className="flex h-11 w-11 items-center justify-center rounded-full bg-black/50 text-white backdrop-blur-sm active:scale-90"
+              >
+                <CollapseIcon />
+              </button>
+            ) : (
+              <span className="flex items-center gap-1.5 rounded-full bg-coral px-2.5 py-1 text-xs font-semibold text-white">
+                <span className="h-1.5 w-1.5 rounded-full bg-white animate-pulse" />
+                {mmss(elapsed)}
+              </span>
+            )}
+            {cameraReady && !recording && (
+              <button
+                type="button"
+                onClick={flipCamera}
+                aria-label="Cambia fotocamera"
+                className="flex h-11 w-11 items-center justify-center rounded-full bg-black/50 text-white backdrop-blur-sm active:scale-90"
+              >
+                <FlipCameraIcon />
+              </button>
+            )}
+          </div>
+
+          {/* Bottone scatto sovrapposto al video in basso */}
+          <div
+            style={{
+              position: "absolute", left: 0, right: 0,
+              bottom: "max(36px, env(safe-area-inset-bottom))",
+              display: "flex", justifyContent: "center",
             }}
           >
             {captureBtn}
           </div>
-        </div>
+        </div>,
+        document.body
       )}
 
       <div
