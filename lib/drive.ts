@@ -274,6 +274,35 @@ export async function readMeta(folderId: string): Promise<ProvaMeta> {
   }
 }
 
+/**
+ * Apre una sessione di upload resumable per aggiornare il contenuto di un file esistente.
+ * Opzionalmente rinomina il file. Il client fa il PUT dei byte all'URL restituito.
+ */
+export async function createResumableUpdateSession(
+  fileId: string,
+  mimeType: string,
+  newName?: string,
+  origin?: string,
+): Promise<string> {
+  const token = await accessToken();
+  const headers: Record<string, string> = {
+    Authorization: `Bearer ${token}`,
+    "Content-Type": "application/json; charset=UTF-8",
+    "X-Upload-Content-Type": mimeType,
+  };
+  if (origin) headers.Origin = origin;
+  const meta: Record<string, string> = {};
+  if (newName) meta.name = newName;
+  const res = await fetch(
+    `${UPLOAD}/files/${fileId}?uploadType=resumable&supportsAllDrives=true`,
+    { method: "PATCH", headers, body: JSON.stringify(meta) },
+  );
+  if (!res.ok) throw new Error(`Drive (update session) ${res.status}: ${await res.text()}`);
+  const location = res.headers.get("location");
+  if (!location) throw new Error("URL di sessione mancante");
+  return location;
+}
+
 /** Mette nel cestino un file Drive. */
 export async function deleteFile(fileId: string): Promise<void> {
   const token = await accessToken();

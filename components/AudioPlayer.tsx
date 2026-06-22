@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import type { AudioFile } from "@/lib/library";
 import { streamUrl } from "@/lib/library";
 import { splitNameExt } from "@/lib/format";
+import TrimModal from "@/components/TrimModal";
 
 function mmss(s: number): string {
   if (!isFinite(s) || s < 0) return "0:00";
@@ -18,33 +19,6 @@ function formatBytes(n: number): string {
   if (!n) return "";
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(0)} KB`;
   return `${(n / 1024 / 1024).toFixed(1)} MB`;
-}
-
-/* ─── WAV encoder ─── */
-function encodeWAV(buf: AudioBuffer, startSec: number, endSec: number): Blob {
-  const sr = buf.sampleRate;
-  const ch = buf.numberOfChannels;
-  const s0 = Math.max(0, Math.floor(startSec * sr));
-  const s1 = Math.min(buf.length, Math.floor(endSec * sr));
-  const n = Math.max(0, s1 - s0);
-  const dataSize = n * ch * 2;
-  const ab = new ArrayBuffer(44 + dataSize);
-  const v = new DataView(ab);
-  function str(off: number, s: string) { for (let i = 0; i < s.length; i++) v.setUint8(off + i, s.charCodeAt(i)); }
-  str(0, "RIFF"); v.setUint32(4, 36 + dataSize, true); str(8, "WAVE");
-  str(12, "fmt "); v.setUint32(16, 16, true); v.setUint16(20, 1, true);
-  v.setUint16(22, ch, true); v.setUint32(24, sr, true); v.setUint32(28, sr * ch * 2, true);
-  v.setUint16(32, ch * 2, true); v.setUint16(34, 16, true);
-  str(36, "data"); v.setUint32(40, dataSize, true);
-  let off = 44;
-  for (let i = 0; i < n; i++) {
-    for (let c = 0; c < ch; c++) {
-      const sample = Math.max(-1, Math.min(1, buf.getChannelData(c)[s0 + i]));
-      v.setInt16(off, sample < 0 ? sample * 0x8000 : sample * 0x7fff, true);
-      off += 2;
-    }
-  }
-  return new Blob([ab], { type: "audio/wav" });
 }
 
 /* ─── Componente principale ─── */
@@ -64,11 +38,8 @@ export default function AudioPlayer({ tracks: initial }: { tracks: AudioFile[] }
   const [editName, setEditName] = useState("");
   const [renameBusy, setRenameBusy] = useState(false);
 
-  /* trim state */
-  const [trimBuffer, setTrimBuffer] = useState<AudioBuffer | null>(null);
-  const [trimLoading, setTrimLoading] = useState(false);
-  const [trimStart, setTrimStart] = useState(0);
-  const [trimEnd, setTrimEnd] = useState(0);
+  /* trim modal */
+  const [trimTrack, setTrimTrack] = useState<AudioFile | null>(null);
 
   /* delete confirm */
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
@@ -130,8 +101,6 @@ export default function AudioPlayer({ tracks: initial }: { tracks: AudioFile[] }
   function openEdit(t: AudioFile) {
     setEditId(t.id);
     setEditName(splitNameExt(t.name).base);
-    setTrimBuffer(null);
-    setTrimLoading(false);
     setConfirmDeleteId(null);
   }
   async function saveRename(id: string) {
@@ -153,32 +122,7 @@ export default function AudioPlayer({ tracks: initial }: { tracks: AudioFile[] }
     }
   }
 
-  /* ─── Trim ─── */
-  async function loadTrim(id: string) {
-    setTrimLoading(true);
-    setTrimBuffer(null);
-    try {
-      const res = await fetch(streamUrl(id));
-      const ab = await res.arrayBuffer();
-      const ctx = new AudioContext();
-      const buf = await ctx.decodeAudioData(ab);
-      setTrimBuffer(buf);
-      setTrimStart(0);
-      setTrimEnd(buf.duration);
-    } catch { /* formato non decodificabile */ }
-    finally { setTrimLoading(false); }
-  }
-  function downloadTrim(id: string) {
-    if (!trimBuffer) return;
-    const track = tracks.find((t) => t.id === id);
-    if (!track) return;
-    const wav = encodeWAV(trimBuffer, trimStart, Math.min(trimEnd, trimBuffer.duration));
-    const { base } = splitNameExt(track.name);
-    const url = URL.createObjectURL(wav);
-    const a = document.createElement("a");
-    a.href = url; a.download = `${base}-trim.wav`; a.click();
-    setTimeout(() => URL.revokeObjectURL(url), 5000);
-  }
+  /* ─── Trim (gestito in TrimModal) ─── */
 
   if (tracks.length === 0) {
     return <p className="text-sm text-sand/50">Ancora nessun file audio in questa prova.</p>;
@@ -290,100 +234,53 @@ export default function AudioPlayer({ tracks: initial }: { tracks: AudioFile[] }
 
               {/* Pannello edit */}
               {isEdit && (
-                <div className="mt-1 flex flex-col gap-3 rounded-xl border border-dark-border bg-dark-bg/60 px-3 py-3">
+                <div className="mt-1 flex flex-col gap-2 rounded-xl border border-dark-border bg-dark-bg/60 px-3 py-3">
                   {/* Rinomina */}
-                  <div>
-                    <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-wider text-sand/40">Rinomina</p>
-                    <div className="flex gap-2">
-                      <input
-                        autoFocus
-                        value={editName}
-                        onChange={(e) => setEditName(e.target.value)}
-                        onKeyDown={(e) => e.key === "Enter" && saveRename(t.id)}
-                        className="field flex-1 text-sm"
-                        placeholder="Nome file"
-                      />
-                      <button
-                        type="button"
-                        onClick={() => saveRename(t.id)}
-                        disabled={renameBusy}
-                        className="shrink-0 rounded-xl bg-sky/20 px-3 py-2 text-sm font-semibold text-sky disabled:opacity-40"
-                      >
-                        {renameBusy ? "…" : "Salva"}
-                      </button>
-                    </div>
+                  <p className="text-[11px] font-semibold uppercase tracking-wider text-sand/40">Rinomina</p>
+                  <div className="flex gap-2">
+                    <input
+                      autoFocus
+                      value={editName}
+                      onChange={(e) => setEditName(e.target.value)}
+                      onKeyDown={(e) => e.key === "Enter" && saveRename(t.id)}
+                      className="field flex-1 text-sm"
+                      placeholder="Nome file"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => saveRename(t.id)}
+                      disabled={renameBusy}
+                      className="shrink-0 rounded-xl bg-sky/20 px-3 py-2 text-sm font-semibold text-sky disabled:opacity-40"
+                    >
+                      {renameBusy ? "…" : "Salva"}
+                    </button>
                   </div>
-
-                  {/* Trim */}
-                  <div>
-                    <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-wider text-sand/40">Taglia</p>
-                    {!trimBuffer ? (
-                      <button
-                        type="button"
-                        onClick={() => loadTrim(t.id)}
-                        disabled={trimLoading}
-                        className="w-full rounded-xl border border-dark-border py-2 text-sm text-sand/60 transition hover:text-sand disabled:opacity-40"
-                      >
-                        {trimLoading ? "Carico audio…" : "Carica per tagliare"}
-                      </button>
-                    ) : (
-                      <div className="flex flex-col gap-2">
-                        <div className="grid grid-cols-2 gap-3">
-                          <label className="flex flex-col gap-1">
-                            <span className="text-xs text-sand/50">Da {mmss(trimStart)}</span>
-                            <input
-                              type="range"
-                              min={0}
-                              max={trimBuffer.duration}
-                              step={0.5}
-                              value={trimStart}
-                              onChange={(e) => {
-                                const v = Number(e.target.value);
-                                setTrimStart(v);
-                                if (v >= trimEnd) setTrimEnd(Math.min(trimBuffer.duration, v + 1));
-                              }}
-                              className="accent-flamingo"
-                            />
-                          </label>
-                          <label className="flex flex-col gap-1">
-                            <span className="text-xs text-sand/50">A {mmss(trimEnd)}</span>
-                            <input
-                              type="range"
-                              min={0}
-                              max={trimBuffer.duration}
-                              step={0.5}
-                              value={trimEnd}
-                              onChange={(e) => {
-                                const v = Number(e.target.value);
-                                setTrimEnd(v);
-                                if (v <= trimStart) setTrimStart(Math.max(0, v - 1));
-                              }}
-                              className="accent-flamingo"
-                            />
-                          </label>
-                        </div>
-                        <p className="text-center text-xs text-sand/50">
-                          Durata selezione: {mmss(Math.max(0, trimEnd - trimStart))}
-                        </p>
-                        <button
-                          type="button"
-                          onClick={() => downloadTrim(t.id)}
-                          className="w-full rounded-xl border border-sky/30 bg-sky/10 py-2 text-sm font-semibold text-sky transition hover:bg-sky/20"
-                        >
-                          Scarica ritaglio (.wav)
-                        </button>
-                        <p className="text-center text-[10px] text-sand/30">
-                          Il file WAV viene scaricato sul dispositivo. Puoi poi ricaricarlo via "Scegli file".
-                        </p>
-                      </div>
-                    )}
-                  </div>
+                  {/* Taglia */}
+                  <button
+                    type="button"
+                    onClick={() => { setEditId(null); setTrimTrack(t); }}
+                    className="mt-1 flex w-full items-center justify-center gap-2 rounded-xl border border-dark-border py-2.5 text-sm text-sand/60 transition hover:text-sand"
+                  >
+                    <ScissorsIcon /> Taglia audio…
+                  </button>
                 </div>
               )}
             </li>
           );
         })}
       </ol>
+
+      {/* TrimModal */}
+      {trimTrack && (
+        <TrimModal
+          track={trimTrack}
+          onClose={() => setTrimTrack(null)}
+          onOverwrite={(updated) => {
+            setTracks((prev) => prev.map((t) => (t.id === updated.id ? updated : t)));
+            setTrimTrack(null);
+          }}
+        />
+      )}
 
       {/* Player bar fisso */}
       {current && (
@@ -471,6 +368,14 @@ function TrashGlyph() {
     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
       <polyline points="3 6 5 6 21 6" /><path d="M19 6l-1 14H6L5 6" />
       <path d="M10 11v6" /><path d="M14 11v6" /><path d="M9 6V4h6v2" />
+    </svg>
+  );
+}
+function ScissorsIcon() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="6" cy="6" r="3" /><circle cx="6" cy="18" r="3" />
+      <line x1="20" y1="4" x2="8.12" y2="15.88" /><line x1="14.47" y1="14.48" x2="20" y2="20" /><line x1="8.12" y1="8.12" x2="12" y2="12" />
     </svg>
   );
 }
