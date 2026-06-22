@@ -305,58 +305,69 @@ export default function Recorder({ onRecorded }: { onRecorded: (blob: Blob) => v
       {fullscreen && mode !== "audio" && (
         <div
           ref={fsOverlayRef}
-          style={{ position: "fixed", inset: 0, zIndex: 50, background: "black", width: "100vw", height: "100dvh" }}
+          style={{
+            position: "fixed", top: 0, left: 0, right: 0, bottom: 0,
+            zIndex: 50, background: "black",
+            display: "flex", flexDirection: "column",
+          }}
         >
-          {/* Video a tutto schermo */}
-          <video
-            ref={setPreview}
-            autoPlay
-            muted
-            playsInline
-            style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover", zIndex: 1 }}
-          />
-
-          {/* Barra superiore: indietro | REC / flip */}
-          <div
-            style={{
-              position: "absolute", top: 0, left: 0, right: 0, zIndex: 2,
-              display: "flex", alignItems: "center", justifyContent: "space-between",
-              padding: "max(16px, env(safe-area-inset-top)) 16px 12px",
-            }}
-          >
-            {!recording ? (
-              <button
-                type="button"
-                onClick={exitFullscreen}
-                aria-label="Indietro"
-                className="flex h-10 w-10 items-center justify-center rounded-full bg-black/50 text-white backdrop-blur-sm active:scale-90"
-              >
-                <CollapseIcon />
-              </button>
-            ) : (
-              <span className="flex items-center gap-1.5 rounded-full bg-coral px-2.5 py-1 text-xs font-semibold text-white">
-                <span className="h-1.5 w-1.5 rounded-full bg-white animate-pulse" />
-                {mmss(elapsed)}
-              </span>
-            )}
-            {cameraReady && !recording && (
-              <button
-                type="button"
-                onClick={flipCamera}
-                aria-label="Cambia fotocamera"
-                className="flex h-10 w-10 items-center justify-center rounded-full bg-black/50 text-white backdrop-blur-sm active:scale-90"
-              >
-                <FlipCameraIcon />
-              </button>
-            )}
+          {/* Area video — flex:1 prende tutto lo spazio disponibile */}
+          <div style={{ flex: 1, position: "relative", overflow: "hidden" }}>
+            <video
+              ref={setPreview}
+              autoPlay
+              muted
+              playsInline
+              style={{
+                position: "absolute", inset: 0,
+                width: "100%", height: "100%",
+                objectFit: "cover",
+                pointerEvents: "none", // non intercetta i tocchi
+              }}
+            />
+            {/* Barra superiore sovrapposta al video */}
+            <div
+              style={{
+                position: "absolute", top: 0, left: 0, right: 0,
+                display: "flex", alignItems: "center", justifyContent: "space-between",
+                padding: "max(14px, env(safe-area-inset-top)) 14px 10px",
+              }}
+            >
+              {!recording ? (
+                <button
+                  type="button"
+                  onClick={exitFullscreen}
+                  aria-label="Indietro"
+                  className="flex h-11 w-11 items-center justify-center rounded-full bg-black/50 text-white backdrop-blur-sm active:scale-90"
+                >
+                  <CollapseIcon />
+                </button>
+              ) : (
+                <span className="flex items-center gap-1.5 rounded-full bg-coral px-2.5 py-1 text-xs font-semibold text-white">
+                  <span className="h-1.5 w-1.5 rounded-full bg-white animate-pulse" />
+                  {mmss(elapsed)}
+                </span>
+              )}
+              {cameraReady && !recording && (
+                <button
+                  type="button"
+                  onClick={flipCamera}
+                  aria-label="Cambia fotocamera"
+                  className="flex h-11 w-11 items-center justify-center rounded-full bg-black/50 text-white backdrop-blur-sm active:scale-90"
+                >
+                  <FlipCameraIcon />
+                </button>
+              )}
+            </div>
           </div>
 
-          {/* Bottone scatto / stop — centrato in basso */}
+          {/* Barra inferiore nel flusso normale — sempre visibile e toccabile */}
           <div
             style={{
-              position: "absolute", bottom: 0, left: 0, right: 0, zIndex: 2,
-              display: "flex", justifyContent: "center",
-              paddingBottom: "max(40px, env(safe-area-inset-bottom))",
+              background: "rgba(0,0,0,0.75)",
+              display: "flex", justifyContent: "center", alignItems: "center",
+              paddingTop: 20,
+              paddingBottom: "max(36px, env(safe-area-inset-bottom))",
             }}
           >
             {captureBtn}
