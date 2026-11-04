@@ -3,7 +3,8 @@
 import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import type { MediaFile } from "@/lib/library";
-import { deleteDriveFile, renameDriveFile, streamUrl } from "@/lib/library";
+import { deleteDriveFile, renameDriveFile, streamUrl, thumbUrl } from "@/lib/library";
+import { isWebImage } from "@/lib/mime";
 import { splitNameExt } from "@/lib/format";
 
 export default function MediaGrid({ files: initialFiles }: { files: MediaFile[] }) {
@@ -39,8 +40,7 @@ export default function MediaGrid({ files: initialFiles }: { files: MediaFile[] 
                 className="relative aspect-square overflow-hidden rounded-lg bg-dark-bg/60 transition active:scale-[0.97]"
                 aria-label={`Apri foto ${f.name}`}
               >
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img src={streamUrl(f.id)} alt="" className="h-full w-full object-cover" loading="lazy" />
+                <Thumb file={f} />
               </button>
             ))}
           </div>
@@ -165,8 +165,7 @@ function PhotoViewer({
       </div>
 
       <div className="relative flex min-h-0 flex-1 items-center justify-center">
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img src={streamUrl(file.id)} alt={file.name} className="max-h-full max-w-full object-contain" />
+        <FullImage key={file.id} file={file} />
       </div>
 
       <div
@@ -212,6 +211,41 @@ function PhotoViewer({
   );
 }
 
+/* ─── Immagini: miniatura di Drive (anche HEIC) con ripieghi ─── */
+
+function Thumb({ file }: { file: MediaFile }) {
+  const web = isWebImage(file.name, file.mimeType);
+  // prima la miniatura di Drive (leggera, funziona con HEIC); se manca e il formato è "web", l'originale
+  const [src, setSrc] = useState<string | null>(file.hasThumbnail ? thumbUrl(file.id, 400) : web ? streamUrl(file.id) : null);
+  if (!src) return <span className="flex h-full w-full items-center justify-center text-2xl">📷</span>;
+  return (
+    // eslint-disable-next-line @next/next/no-img-element
+    <img
+      src={src}
+      alt=""
+      className="h-full w-full object-cover"
+      loading="lazy"
+      onError={() => setSrc(web && !src.startsWith("/api/stream") ? streamUrl(file.id) : null)}
+    />
+  );
+}
+
+function FullImage({ file }: { file: MediaFile }) {
+  const web = isWebImage(file.name, file.mimeType);
+  // formati che il browser sa mostrare → originale; HEIC & co. → miniatura grande di Drive
+  const [src, setSrc] = useState<string | null>(web ? streamUrl(file.id) : thumbUrl(file.id, 2000));
+  if (!src) return <p className="text-sm text-white/60">Anteprima non disponibile 😕</p>;
+  return (
+    // eslint-disable-next-line @next/next/no-img-element
+    <img
+      src={src}
+      alt={file.name}
+      className="max-h-full max-w-full object-contain"
+      onError={() => setSrc(src.startsWith("/api/thumb") ? null : thumbUrl(file.id, 2000))}
+    />
+  );
+}
+
 /* ─── Video ─── */
 
 function VideoCard({
@@ -228,6 +262,7 @@ function VideoCard({
   const [editVal, setEditVal] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [unplayable, setUnplayable] = useState(false);
 
   async function doDelete() {
     setBusy(true);
@@ -270,14 +305,34 @@ function VideoCard({
 
   return (
     <div className="card overflow-hidden p-0">
-      <video
-        src={streamUrl(file.id)}
-        controls
-        playsInline
-        preload="metadata"
-        className="w-full bg-black"
-        style={{ maxHeight: 260 }}
-      />
+      {unplayable ? (
+        <div className="relative flex aspect-video w-full flex-col items-center justify-center gap-2 bg-black px-4 text-center">
+          {file.hasThumbnail && (
+            /* eslint-disable-next-line @next/next/no-img-element */
+            <img src={thumbUrl(file.id, 800)} alt="" className="absolute inset-0 h-full w-full object-cover opacity-30" />
+          )}
+          <p className="relative text-sm text-sand/80">Questo telefono non riesce a riprodurre il video 😕</p>
+          <a
+            href={streamUrl(file.id, true)}
+            download={file.name}
+            className="relative rounded-lg bg-sky/20 px-3 py-1.5 text-xs font-semibold text-sky"
+          >
+            Scaricalo e aprilo con un&apos;altra app
+          </a>
+        </div>
+      ) : (
+        <video
+          src={streamUrl(file.id)}
+          poster={file.hasThumbnail ? thumbUrl(file.id, 800) : undefined}
+          controls
+          playsInline
+          // con la copertina non serve scaricare nulla finché non si preme play (risparmia dati)
+          preload={file.hasThumbnail ? "none" : "metadata"}
+          onError={() => setUnplayable(true)}
+          className="w-full bg-black"
+          style={{ maxHeight: 260 }}
+        />
+      )}
 
       {error && <p className="px-3 pt-2 text-xs text-coral">{error}</p>}
 

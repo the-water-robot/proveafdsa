@@ -4,6 +4,7 @@ import { OAuth2Client } from "google-auth-library";
 import { folderNameForDate } from "./format";
 import { defaultMeta, sanitizeMeta, type ProvaMeta } from "./band";
 import { labelOf } from "./recording";
+import { kindOf, mimeFor } from "./mime";
 
 const DRIVE = "https://www.googleapis.com/drive/v3";
 const UPLOAD = "https://www.googleapis.com/upload/drive/v3";
@@ -214,6 +215,7 @@ export interface MediaFile {
   mimeType: string;
   size: number;
   subfolder: "video" | "foto";
+  hasThumbnail?: boolean;
 }
 
 /** Sottocartelle-prova dentro DRIVE_FOLDER_ID, dalla più recente. */
@@ -232,30 +234,61 @@ export async function listRehearsalFolders(): Promise<DriveFolder[]> {
   return folders;
 }
 
-/** File audio dentro una cartella, in ordine cronologico (l'orario è in testa al nome). */
+interface RawFile {
+  id: string;
+  name: string;
+  mimeType: string;
+  size?: string;
+  modifiedTime?: string;
+  hasThumbnail?: boolean;
+  parents?: string[];
+}
+
+/** File (non cartelle) dentro una o più cartelle, ordinati per nome (= orario in testa). */
+async function listChildren(token: string, parentIds: string[]): Promise<RawFile[]> {
+  if (!parentIds.length) return [];
+  const q =
+    `(${parentIds.map((id) => `'${id}' in parents`).join(" or ")}) ` +
+    `and mimeType != '${FOLDER_MIME}' and trashed = false`;
+  const out: RawFile[] = [];
+  let pageToken = "";
+  do {
+    const res = await driveFetch(
+      token,
+      `${DRIVE}/files?q=${encodeURIComponent(q)}` +
+        `&fields=nextPageToken,files(id,name,mimeType,size,modifiedTime,hasThumbnail,parents)` +
+        `&orderBy=name&pageSize=1000&supportsAllDrives=true&includeItemsFromAllDrives=true` +
+        (pageToken ? `&pageToken=${pageToken}` : ""),
+    );
+    if (!res.ok) throw new Error(`Drive (lista file) ${res.status}: ${await res.text()}`);
+    const j = (await res.json()) as { files?: RawFile[]; nextPageToken?: string };
+    out.push(...(j.files ?? []));
+    pageToken = j.nextPageToken ?? "";
+  } while (pageToken);
+  return out;
+}
+
+function trust(parentId: string, files: RawFile[]) {
+  // chiamata solo dopo assertInRoot(parentId) → i figli sono dentro la cartella della band
+  if (!insideRoot.has(parentId)) return;
+  for (const f of files) insideRoot.set(f.id, { id: f.id, name: f.name, mimeType: f.mimeType });
+}
+
+/**
+ * File audio di una cartella-prova, in ordine cronologico (l'orario è in testa al nome).
+ * Il tipo si decide anche dall'estensione: su Drive ci sono .m4a salvati come "audio/mpeg" ecc.
+ */
 export async function listAudioFiles(folderId: string): Promise<AudioFile[]> {
   const token = await accessToken();
-  const q = `'${folderId}' in parents and trashed = false and mimeType contains 'audio/'`;
-  const url =
-    `${DRIVE}/files?q=${encodeURIComponent(q)}&fields=files(id,name,mimeType,size,modifiedTime)&orderBy=name` +
-    `&pageSize=1000&supportsAllDrives=true&includeItemsFromAllDrives=true`;
-  const res = await driveFetch(token, url);
-  if (!res.ok) throw new Error(`Drive (lista file) ${res.status}: ${await res.text()}`);
-  const j = (await res.json()) as {
-    files?: { id: string; name: string; mimeType: string; size?: string; modifiedTime?: string }[];
-  };
-  const files = (j.files ?? []).map((f) => ({
+  const raw = (await listChildren(token, [folderId])).filter((f) => kindOf(f.name, f.mimeType) === "audio");
+  trust(folderId, raw);
+  return raw.map((f) => ({
     id: f.id,
     name: f.name,
-    mimeType: f.mimeType,
+    mimeType: mimeFor(f.name, f.mimeType),
     size: Number(f.size ?? 0),
     modifiedTime: f.modifiedTime,
   }));
-  // chiamata solo dopo assertInRoot(folderId) → i figli sono dentro la cartella della band
-  if (insideRoot.has(folderId)) {
-    for (const f of files) insideRoot.set(f.id, { id: f.id, name: f.name, mimeType: f.mimeType });
-  }
-  return files;
 }
 
 /** Stream del contenuto di un file da Drive, inoltrando l'header Range (per <audio> con seek). */
@@ -305,41 +338,47 @@ export async function ensureSubfolder(parentId: string, subName: string): Promis
   return ((await createRes.json()) as { id: string }).id;
 }
 
-/** File media (video + foto) nelle sottocartelle di una cartella-prova. */
+/**
+ * Foto e video di una cartella-prova: sia nelle sottocartelle "video"/"foto" (dove li mette l'app)
+ * sia sparsi nella cartella (caricati a mano da Drive, es. i .mov dell'iPhone).
+ */
 export async function listMediaFiles(sessionFolderId: string): Promise<MediaFile[]> {
   const token = await accessToken();
-  const q =
-    `'${sessionFolderId}' in parents and mimeType = '${FOLDER_MIME}' ` +
-    `and (name = 'video' or name = 'foto') and trashed = false`;
+  const q = `'${sessionFolderId}' in parents and mimeType = '${FOLDER_MIME}' and trashed = false`;
   const subRes = await driveFetch(
     token,
     `${DRIVE}/files?q=${encodeURIComponent(q)}&fields=files(id,name)` +
       `&supportsAllDrives=true&includeItemsFromAllDrives=true`,
   );
-  if (!subRes.ok) return [];
-  const subJson = (await subRes.json()) as { files?: { id: string; name: string }[] };
-
-  const results: MediaFile[] = [];
-  for (const sub of subJson.files ?? []) {
-    const subfolder = sub.name as "video" | "foto";
-    const mimeFilter = subfolder === "video" ? "mimeType contains 'video/'" : "mimeType contains 'image/'";
-    const q2 = `'${sub.id}' in parents and trashed = false and ${mimeFilter}`;
-    const filesRes = await driveFetch(
-      token,
-      `${DRIVE}/files?q=${encodeURIComponent(q2)}&fields=files(id,name,mimeType,size)&orderBy=name` +
-        `&pageSize=200&supportsAllDrives=true&includeItemsFromAllDrives=true`,
-    );
-    if (!filesRes.ok) continue;
-    const filesJson = (await filesRes.json()) as {
-      files?: { id: string; name: string; mimeType: string; size?: string }[];
-    };
-    const trusted = insideRoot.has(sessionFolderId);
-    for (const f of filesJson.files ?? []) {
-      results.push({ id: f.id, name: f.name, mimeType: f.mimeType, size: Number(f.size ?? 0), subfolder });
-      if (trusted) insideRoot.set(f.id, { id: f.id, name: f.name, mimeType: f.mimeType });
-    }
+  const subs = subRes.ok ? (((await subRes.json()) as { files?: { id: string }[] }).files ?? []) : [];
+  if (insideRoot.has(sessionFolderId)) {
+    for (const sub of subs) insideRoot.set(sub.id, { id: sub.id, name: "", mimeType: FOLDER_MIME });
   }
-  return results;
+  const raw = (await listChildren(token, [sessionFolderId, ...subs.map((x) => x.id)])).filter((f) => {
+    const k = kindOf(f.name, f.mimeType);
+    return k === "video" || k === "image";
+  });
+  trust(sessionFolderId, raw);
+  return raw.map((f) => ({
+    id: f.id,
+    name: f.name,
+    mimeType: mimeFor(f.name, f.mimeType),
+    size: Number(f.size ?? 0),
+    subfolder: kindOf(f.name, f.mimeType) === "video" ? "video" : "foto",
+    hasThumbnail: Boolean(f.hasThumbnail),
+  }));
+}
+
+/** Miniatura generata da Drive (funziona anche per HEIC e video). `size` = lato lungo in px. */
+export async function fetchThumbnail(id: string, size: number): Promise<Response | null> {
+  const token = await accessToken();
+  const meta = await driveFetch(token, `${DRIVE}/files/${id}?fields=thumbnailLink&supportsAllDrives=true`);
+  if (!meta.ok) return null;
+  const { thumbnailLink } = (await meta.json()) as { thumbnailLink?: string };
+  if (!thumbnailLink) return null;
+  const url = thumbnailLink.replace(/=s\d+$/, "") + `=s${Math.max(64, Math.min(2000, size))}`;
+  const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+  return res.ok ? res : null;
 }
 
 /** Legge i metadati della prova (_prova.json). Se manca, ritorna i default. */

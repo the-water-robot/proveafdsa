@@ -20,6 +20,7 @@ export interface MediaFile {
   mimeType: string;
   size: number;
   subfolder: "video" | "foto";
+  hasThumbnail?: boolean;
 }
 
 async function fetchRetry(input: string, init?: RequestInit, attempts = 3): Promise<Response> {
@@ -84,6 +85,11 @@ export function streamUrl(id: string, download = false, version?: string): strin
     (download ? "&download=1" : "") +
     (version ? `&v=${encodeURIComponent(version)}` : "")
   );
+}
+
+/** Miniatura di Drive (HEIC, video…): `size` = lato lungo in px. */
+export function thumbUrl(id: string, size = 400): string {
+  return `/api/thumb?id=${encodeURIComponent(id)}&s=${size}`;
 }
 
 /** PIN salvato sul telefono (se la band ha impostato UPLOAD_PIN). */
