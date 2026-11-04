@@ -218,6 +218,8 @@ export interface MediaFile {
   hasThumbnail?: boolean;
 }
 
+let foldersMemo: { at: number; ids: Set<string> } | null = null;
+
 /** Sottocartelle-prova dentro DRIVE_FOLDER_ID, dalla più recente. */
 export async function listRehearsalFolders(): Promise<DriveFolder[]> {
   const token = await accessToken();
@@ -231,6 +233,7 @@ export async function listRehearsalFolders(): Promise<DriveFolder[]> {
   const j = (await res.json()) as { files?: DriveFolder[] };
   const folders = (j.files ?? []).filter((f) => /^\d{4} \d{2} \d{2}$/.test(f.name));
   for (const f of folders) insideRoot.set(f.id, { id: f.id, name: f.name, mimeType: FOLDER_MIME });
+  foldersMemo = { at: Date.now(), ids: new Set(folders.map((f) => f.id)) };
   return folders;
 }
 
@@ -537,4 +540,67 @@ export async function listRecentSongs(maxFolders = 12): Promise<SongSuggestion[]
 /** Da chiamare dopo un upload/rinomina: il repertorio va ricalcolato. */
 export function invalidateSongs() {
   songsCache = null;
+}
+
+/* ─────────────────  Riepilogo per la lista prove (conteggi + info) a gruppi  ───────────────── */
+
+export interface FolderSummary {
+  id: string;
+  audio: number;
+  photos: number;
+  videos: number;
+  meta: ProvaMeta;
+}
+
+/** Riepilogo di più cartelle-prova con poche chiamate: sottocartelle, tutti i file, i _prova.json. */
+export async function summarizeFolders(ids: string[]): Promise<FolderSummary[]> {
+  // solo cartelle-prova vere (evita di usare l'endpoint per sbirciare altro del Drive)
+  if (!foldersMemo || Date.now() - foldersMemo.at > 60_000) {
+    foldersMemo = { at: Date.now(), ids: new Set((await listRehearsalFolders()).map((f) => f.id)) };
+  }
+  const valid = ids.filter((id) => foldersMemo!.ids.has(id)).slice(0, 12);
+  if (!valid.length) return [];
+  const token = await accessToken();
+
+  const sum = new Map<string, FolderSummary>(
+    valid.map((id) => [id, { id, audio: 0, photos: 0, videos: 0, meta: defaultMeta() }]),
+  );
+  const count = (s: FolderSummary | undefined, f: RawFile) => {
+    if (!s || f.name === META_NAME) return;
+    const k = kindOf(f.name, f.mimeType);
+    if (k === "audio") s.audio++;
+    else if (k === "image") s.photos++;
+    else if (k === "video") s.videos++;
+  };
+
+  // Giro 1 (in parallelo): sottocartelle (video/foto) + file nelle cartelle-prova
+  const subQ =
+    `(${valid.map((id) => `'${id}' in parents`).join(" or ")}) ` +
+    `and mimeType = '${FOLDER_MIME}' and trashed = false`;
+  const [subs, rootFiles] = await Promise.all([
+    driveFetch(
+      token,
+      `${DRIVE}/files?q=${encodeURIComponent(subQ)}&fields=files(id,parents)&pageSize=1000` +
+        `&supportsAllDrives=true&includeItemsFromAllDrives=true`,
+    ).then(async (r) => (r.ok ? (((await r.json()) as { files?: { id: string; parents?: string[] }[] }).files ?? []) : [])),
+    listChildren(token, valid),
+  ]);
+  for (const f of rootFiles) count(sum.get(f.parents?.[0] ?? ""), f);
+  const owner = new Map<string, string>();
+  for (const sub of subs) if (sub.parents?.[0]) owner.set(sub.id, sub.parents[0]);
+
+  // Giro 2 (in parallelo): file nelle sottocartelle + lettura dei _prova.json
+  await Promise.all([
+    listChildren(token, [...owner.keys()]).then((files) => {
+      for (const f of files) count(sum.get(owner.get(f.parents?.[0] ?? "") ?? ""), f);
+    }),
+    ...rootFiles
+      .filter((f) => f.name === META_NAME)
+      .map(async (f) => {
+        const s = sum.get(f.parents?.[0] ?? "");
+        const r = await driveFetch(token, `${DRIVE}/files/${f.id}?alt=media&supportsAllDrives=true`);
+        if (s && r.ok) s.meta = sanitizeMeta(await r.json().catch(() => ({})));
+      }),
+  ]);
+  return valid.map((id) => sum.get(id)!);
 }

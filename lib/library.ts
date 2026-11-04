@@ -74,6 +74,18 @@ export async function saveMeta(folder: string, meta: ProvaMeta, pin?: string): P
   return (await jsonOrThrow(res)).meta;
 }
 
+export interface FolderSummary {
+  id: string;
+  audio: number;
+  photos: number;
+  videos: number;
+  meta: ProvaMeta;
+}
+
+export async function fetchSummaries(ids: string[]): Promise<FolderSummary[]> {
+  return (await jsonOrThrow(await fetchRetry(`/api/summary?ids=${ids.map(encodeURIComponent).join(",")}`))).summaries;
+}
+
 export async function fetchMedia(folder: string): Promise<MediaFile[]> {
   return (await jsonOrThrow(await fetchRetry(`/api/media?folder=${encodeURIComponent(folder)}`))).files;
 }
