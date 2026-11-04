@@ -28,6 +28,10 @@ export const MOODS = [
   { id: "mirabilantiavventure", label: "Mirabilanti Avventure", emoji: "🗺️" },
   { id: "pesciato", label: "Pesciato", emoji: "🐟" },
   { id: "carichi-sempre", label: "Carichi Sempre", emoji: "⚡" },
+  { id: "rnd", label: "R&D", emoji: "🧪" },
+  { id: "ddue", label: "Ddue", emoji: "✌️" }, // un 2 rafforzato
+  { id: "discreta", label: "Discreta", emoji: "👌" },
+  { id: "mezzafigata", label: "Mezzafigata", emoji: "😏" },
 ] as const;
 export type MoodId = (typeof MOODS)[number]["id"];
 

@@ -147,7 +147,7 @@ export default function Home() {
           <h1 className="font-display text-2xl font-bold leading-tight">Prove</h1>
           <p className="text-sm text-sand/60">Animali Fantastici del Sud America</p>
         </div>
-        <span className="text-xs text-sand/30 font-mono">v19</span>
+        <span className="text-xs text-sand/30 font-mono">v20</span>
       </header>
 
       {configMissing && configMissing.length > 0 && (
