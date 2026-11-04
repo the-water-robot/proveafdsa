@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { ensureSessionFolder, ensureSubfolder, createResumableSession, pinOk } from "@/lib/drive";
+import { ensureSessionFolder, ensureSubfolder, createResumableSession, invalidateSongs, pinOk } from "@/lib/drive";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -35,6 +35,7 @@ export async function POST(req: NextRequest) {
       origin,
     );
 
+    invalidateSongs();
     return NextResponse.json({
       sessionUrl,
       folderId: folder.id,

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { assertInRoot, deleteFile, errorStatus, pinOk, renameFile } from "@/lib/drive";
+import { assertInRoot, deleteFile, errorStatus, invalidateSongs, pinOk, renameFile } from "@/lib/drive";
 import { sanitizeSegment, splitNameExt } from "@/lib/format";
 
 export const runtime = "nodejs";
@@ -44,6 +44,7 @@ export async function PATCH(req: NextRequest) {
     const name = ext ? `${clean}.${sanitizeSegment(ext)}` : clean;
     await assertInRoot(id);
     await renameFile(id, name);
+    invalidateSongs();
     return NextResponse.json({ ok: true, name });
   } catch (e) {
     return fail(e);

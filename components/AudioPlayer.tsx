@@ -4,7 +4,9 @@ import { useEffect, useRef, useState } from "react";
 import type { AudioFile } from "@/lib/library";
 import { deleteDriveFile, renameDriveFile, streamUrl } from "@/lib/library";
 import { formatBytes, prettyFolderDate, splitNameExt } from "@/lib/format";
-import { isMember, memberLabel } from "@/lib/band";
+import { findSong, labelOf, recordedAt, recordedBy, relabel, songTitle } from "@/lib/recording";
+import { CANZONIERE_URL } from "@/lib/repertoire";
+import LabelPicker from "@/components/LabelPicker";
 import TrimModal from "@/components/TrimModal";
 
 function mmss(s: number): string {
@@ -16,26 +18,6 @@ function mmss(s: number): string {
 function prettyName(name: string): string {
   return splitNameExt(name).base || name;
 }
-/** "22.19.35 — Rosa — prova.webm" → "ore 22:19" */
-function recordedAt(name: string): string {
-  const m = /^(\d{2})\.(\d{2})\.\d{2}\b/.exec(name);
-  return m ? `ore ${m[1]}:${m[2]}` : "";
-}
-/** "22.19.35 — Rosa — prova.webm" → "Rosa" (titolo per auto / schermata di blocco). */
-function songTitle(name: string): string {
-  const parts = prettyName(name).split(" — ").map((p) => p.trim()).filter(Boolean);
-  if (parts.length > 1 && /^\d{2}\.\d{2}\.\d{2}$/.test(parts[0])) parts.shift();
-  if (parts.length > 1 && /^(prova|video|foto)$/i.test(parts[parts.length - 1])) parts.pop();
-  if (parts.length > 1 && isMember(parts[0])) parts.shift(); // "pit — Rosa" → "Rosa" (chi è mostrato a parte)
-  return parts.join(" — ") || prettyName(name);
-}
-/** Chi ha registrato (secondo segmento del nome, se è un membro della band). */
-function recordedBy(name: string): string {
-  const parts = prettyName(name).split(" — ").map((p) => p.trim());
-  const i = /^\d{2}\.\d{2}\.\d{2}$/.test(parts[0] ?? "") ? 1 : 0;
-  return parts.length > i + 1 && isMember(parts[i]) ? memberLabel(parts[i]) : "";
-}
-
 /* ─── Componente principale ─── */
 
 export default function AudioPlayer({
@@ -62,6 +44,9 @@ export default function AudioPlayer({
   const [editName, setEditName] = useState("");
   const [renameBusy, setRenameBusy] = useState(false);
 
+  /* scelta del pezzo (etichetta) */
+  const [labelFor, setLabelFor] = useState<AudioFile | null>(null);
+
   /* trim modal */
   const [trimTrack, setTrimTrack] = useState<AudioFile | null>(null);
 
@@ -71,6 +56,7 @@ export default function AudioPlayer({
 
   const index = currentId ? tracks.findIndex((t) => t.id === currentId) : -1;
   const current = index >= 0 ? tracks[index] : null;
+  const currentSong = current ? findSong(songTitle(current.name)) : null;
 
   // Ref per i gestori di eventi media / Media Session (non devono vedere stato vecchio)
   const tracksRef = useRef(tracks);
@@ -266,8 +252,12 @@ export default function AudioPlayer({
     const track = tracks.find((t) => t.id === id);
     if (!track || !editName.trim()) { setEditId(null); return; }
     const { ext } = splitNameExt(track.name);
-    const newName = ext ? `${editName.trim()}.${ext}` : editName.trim();
-    if (newName === track.name) { setEditId(null); return; }
+    await renameTo(id, ext ? `${editName.trim()}.${ext}` : editName.trim());
+  }
+
+  async function renameTo(id: string, newName: string) {
+    const track = tracks.find((t) => t.id === id);
+    if (!track || newName === track.name) { setEditId(null); return; }
     setRenameBusy(true);
     setActionError(null);
     try {
@@ -339,7 +329,11 @@ export default function AudioPlayer({
                 </button>
 
                 <button type="button" onClick={() => selectTrack(i)} className="min-w-0 flex-1 text-left">
-                  <p className="truncate text-sm font-medium">{`${i + 1}. ${songTitle(t.name)}`}</p>
+                  <p className="truncate text-sm font-medium">
+                    {`${i + 1}. `}
+                    {findSong(songTitle(t.name))?.emoji && <span aria-hidden>{findSong(songTitle(t.name))!.emoji} </span>}
+                    {songTitle(t.name)}
+                  </p>
                   <p className="text-xs text-sand/50">
                     {active && dur > 0
                       ? `${mmss(time)} / ${mmss(dur)}`
@@ -427,6 +421,14 @@ export default function AudioPlayer({
                       {renameBusy ? "…" : "Salva"}
                     </button>
                   </div>
+                  {/* Pezzo dal repertorio */}
+                  <button
+                    type="button"
+                    onClick={() => { setEditId(null); setLabelFor(t); }}
+                    className="mt-1 flex w-full items-center justify-center gap-2 rounded-xl border border-sky/30 bg-sky/10 py-2.5 text-sm font-medium text-sky"
+                  >
+                    🎵 Scegli il pezzo
+                  </button>
                   {/* Taglia */}
                   <button
                     type="button"
@@ -441,6 +443,15 @@ export default function AudioPlayer({
           );
         })}
       </ol>
+
+      {labelFor && (
+        <LabelPicker
+          title="Che pezzo è? 🎶"
+          current={labelOf(labelFor.name)}
+          onPick={(l) => renameTo(labelFor.id, relabel(labelFor.name, l))}
+          onClose={() => setLabelFor(null)}
+        />
+      )}
 
       {/* TrimModal */}
       {trimTrack && (
@@ -462,8 +473,20 @@ export default function AudioPlayer({
       {/* Player bar fisso */}
       {current && (
         <div className="card sticky bottom-[calc(4rem+env(safe-area-inset-bottom))] z-10 flex flex-col gap-1 bg-dark-card/95 p-3 shadow-2xl backdrop-blur">
-          <div className="flex items-baseline justify-between gap-3 px-1">
-            <p className="min-w-0 truncate text-sm font-semibold">{songTitle(current.name)}</p>
+          <div className="flex items-center justify-between gap-2 px-1">
+            <p className="min-w-0 flex-1 truncate text-sm font-semibold">
+              {findSong(songTitle(current.name))?.emoji} {songTitle(current.name)}
+            </p>
+            {currentSong && (
+              <a
+                href={`${CANZONIERE_URL}/${currentSong.slug}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="shrink-0 rounded-full bg-sky/15 px-2 py-0.5 text-[11px] font-semibold text-sky"
+              >
+                📖 accordi
+              </a>
+            )}
             <p className="shrink-0 font-mono text-xs tabular-nums text-sand/50">
               {loading ? "carico…" : `${mmss(time)} / ${dur > 0 ? mmss(dur) : "–:––"}`}
             </p>

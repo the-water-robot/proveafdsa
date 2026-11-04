@@ -3,44 +3,59 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import Link from "next/link";
 import Recorder from "@/components/Recorder";
-import { INSTRUMENT, MEMBERS } from "@/lib/band";
+import LabelPicker from "@/components/LabelPicker";
+import { INSTRUMENT, MEMBERS, memberLabel } from "@/lib/band";
 import { extFromMime, formatBytes, prettyFolderDate, splitNameExt, todayIso } from "@/lib/format";
+import { findSong, rankSuggestions } from "@/lib/recording";
+import { useSongs } from "@/lib/songs";
 import {
   addBlob,
+  clearDone,
   dismissRestored,
   getServerSnapshot,
   getSnapshot,
-  nameFor,
   removeItem,
   restoreQueue,
+  retryItem,
+  setAutoUpload,
   setDate,
-  setLabel,
+  setItemLabel,
+  setNextLabel,
+  setPin,
+  setWho,
   subscribe,
   uploadAll,
+  type QueueItem,
   type Status,
 } from "@/lib/queue";
 
 const SHARE_CACHE = "afdsa-shared";
 const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
+// Un po' di simpatia, ma stabile per ogni file (niente frasi che cambiano a ogni render)
+const MYSTERY = ["Che pezzo era? 🤔", "Pezzo misterioso 🕵️", "Senza nome, per ora 🎶", "Dagli un nome ✨"];
+const CHEERS = ["Al sicuro su Drive 🔒", "Caricato! 🤘", "In cassaforte 💾", "Fatto, bravi ✨", "Salvato 🎉"];
+function pickFor(id: string, list: string[]) {
+  let h = 0;
+  for (const c of id) h = (h * 31 + c.charCodeAt(0)) | 0;
+  return list[Math.abs(h) % list.length];
+}
+
 export default function Home() {
-  const { items, uploading, recording, date, label, lastFolder, restoredCount } = useSyncExternalStore(
-    subscribe,
-    getSnapshot,
-    getServerSnapshot,
-  );
-  const [who, setWho] = useState("");
+  const s = useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot);
+  const { items, uploading, recording, date, lastFolder, restoredCount, who, pin, autoUpload, nextLabel } = s;
   const [pinProtected, setPinProtected] = useState(false);
-  const [pin, setPin] = useState("");
   const [configMissing, setConfigMissing] = useState<string[] | null>(null);
+  // picker aperto: per un file della coda, oppure per la prossima registrazione
+  const [picker, setPicker] = useState<{ itemId: string; justRecorded?: boolean } | { next: true } | null>(null);
+
+  const songs = useSongs();
+  const quick = rankSuggestions(songs).ranked.slice(0, 4);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Carica preferenze locali + stato del server + coda salvata + eventuali file condivisi (share target)
+  // Preferenze + stato server + coda salvata + eventuali file condivisi (share target)
   useEffect(() => {
-    setWho(localStorage.getItem("afdsa-who") || "");
-    setPin(localStorage.getItem("afdsa-pin") || "");
-
     fetch("/api/health")
       .then((r) => r.json())
       .then((h) => {
@@ -54,17 +69,9 @@ export default function Home() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  function changeWho(v: string) {
-    setWho(v);
-    localStorage.setItem("afdsa-who", v);
-  }
-  function changePin(v: string) {
-    setPin(v);
-    localStorage.setItem("afdsa-pin", v);
-  }
-
-  const pendingCount = items.filter((i) => i.status === "ready" || i.status === "error").length;
-  const allDone = items.length > 0 && items.every((i) => i.status === "done");
+  const waiting = items.filter((i) => i.status === "ready" || i.status === "error");
+  const errors = waiting.filter((i) => i.status === "error").length;
+  const doneCount = items.filter((i) => i.status === "done").length;
 
   // Avviso prima di chiudere/ricaricare mentre si registra o si carica
   useEffect(() => {
@@ -80,7 +87,9 @@ export default function Home() {
   const onRecorded = useCallback((blob: Blob) => {
     const type = blob.type || "";
     const base = type.startsWith("video/") ? "video" : type.startsWith("image/") ? "foto" : "prova";
-    addBlob(blob, base, extFromMime(type || "audio/webm"));
+    const item = addBlob(blob, base, extFromMime(type || "audio/webm"));
+    // appena fermata una registrazione senza nome: chiedi subito che pezzo era (un tocco e via)
+    if (!item.label && !type.startsWith("image/")) setPicker({ itemId: item.id, justRecorded: true });
   }, []);
 
   const addFiles = useCallback((files: FileList | File[]) => {
@@ -114,6 +123,8 @@ export default function Home() {
 
   const isToday = date === todayIso();
   const folderName = date.replace(/-/g, " ");
+  const pickerItem = picker && "itemId" in picker ? items.find((i) => i.id === picker.itemId) : null;
+  const nextSong = nextLabel ? findSong(nextLabel) : null;
 
   return (
     <main className="mx-auto flex min-h-[100dvh] max-w-md flex-col gap-5 px-4 pb-[calc(9rem+env(safe-area-inset-bottom))] pt-safe">
@@ -123,7 +134,7 @@ export default function Home() {
           <h1 className="font-display text-2xl font-bold leading-tight">Prove</h1>
           <p className="text-sm text-sand/60">Animali Fantastici del Sud America</p>
         </div>
-        <span className="text-xs text-sand/30 font-mono">v14</span>
+        <span className="text-xs text-sand/30 font-mono">v15</span>
       </header>
 
       {configMissing && configMissing.length > 0 && (
@@ -141,7 +152,7 @@ export default function Home() {
             <b className="text-solar">
               {restoredCount === 1 ? "1 file recuperato" : `${restoredCount} file recuperati`}
             </b>{" "}
-            dall&apos;ultima volta: non erano ancora stati caricati. Controlla la data e premi Carica.
+            dall&apos;ultima volta, non ancora caricati. Controlla la data e premi Carica.
           </p>
           <button type="button" onClick={dismissRestored} className="text-sand/40" aria-label="Chiudi avviso">
             <CloseIcon />
@@ -183,7 +194,7 @@ export default function Home() {
                 <button
                   key={m}
                   type="button"
-                  onClick={() => changeWho(on ? "" : m)}
+                  onClick={() => setWho(on ? "" : m)}
                   aria-pressed={on}
                   title={INSTRUMENT[m].label}
                   className={`chip ${on ? "chip-on" : "chip-off"}`}
@@ -193,19 +204,6 @@ export default function Home() {
               );
             })}
           </div>
-        </div>
-        <div>
-          <label className="label" htmlFor="label">
-            Etichetta <span className="text-sand/40">(opz.)</span>
-          </label>
-          <input
-            id="label"
-            type="text"
-            value={label}
-            onChange={(e) => setLabel(e.target.value)}
-            placeholder="es. soundcheck, nuovo pezzo…"
-            className="field"
-          />
         </div>
         {pinProtected && (
           <div>
@@ -217,7 +215,7 @@ export default function Home() {
               type="text"
               inputMode="numeric"
               value={pin}
-              onChange={(e) => changePin(e.target.value)}
+              onChange={(e) => setPin(e.target.value)}
               placeholder="codice della band"
               className="field"
             />
@@ -225,9 +223,42 @@ export default function Home() {
         )}
       </section>
 
-      {/* Aggiungi */}
+      {/* Registra / aggiungi */}
       <section className="card flex flex-col items-center gap-5 p-6">
         <Recorder onRecorded={onRecorded} />
+
+        {/* Pezzo scelto PRIMA (facoltativo): vale per la prossima registrazione */}
+        <div className="flex w-full flex-wrap items-center justify-center gap-2 text-sm">
+          {nextLabel ? (
+            <>
+              <span className="text-sand/50">{recording ? "Sta registrando:" : "Prossimo pezzo:"}</span>
+              <button
+                type="button"
+                onClick={() => setPicker({ next: true })}
+                className="chip chip-on"
+              >
+                <span aria-hidden>{nextSong?.emoji ?? "🎵"}</span> {nextLabel}
+              </button>
+              <button
+                type="button"
+                onClick={() => setNextLabel("")}
+                aria-label="Togli il pezzo"
+                className="rounded-full p-1 text-sand/40"
+              >
+                <CloseIcon />
+              </button>
+            </>
+          ) : (
+            <button
+              type="button"
+              onClick={() => setPicker({ next: true })}
+              className="text-sky underline-offset-4 hover:underline"
+            >
+              {recording ? "🎵 Cosa state suonando?" : "🎵 Sai già cosa suonate? (opz.)"}
+            </button>
+          )}
+        </div>
+
         <div className="flex w-full items-center gap-3 text-xs text-sand/40">
           <span className="h-px flex-1 bg-dark-border" />
           oppure
@@ -256,42 +287,26 @@ export default function Home() {
       {/* Coda */}
       {items.length > 0 && (
         <section className="flex flex-col gap-2">
-          <h2 className="px-1 text-sm font-semibold text-sand/70">
-            {allDone ? "Caricati" : `Da caricare (${pendingCount})`}
-          </h2>
-          {items.map((item) => (
-            <div key={item.id} className="card flex items-center gap-3 p-3">
-              <StatusDot status={item.status} />
-              <div className="min-w-0 flex-1">
-                <p className="truncate text-sm font-medium">{nameFor(item, who, label)}</p>
-                <p className="text-xs text-sand/50">
-                  {formatBytes(item.size)}
-                  {item.status === "uploading" && ` · ${Math.round(item.progress * 100)}%`}
-                  {item.status === "done" && " · caricato ✓"}
-                  {item.status === "error" && (
-                    <span className="text-coral"> · {item.error}</span>
-                  )}
-                </p>
-                {item.status === "uploading" && (
-                  <div className="mt-1.5 h-1.5 w-full overflow-hidden rounded-full bg-dark-bg">
-                    <div
-                      className="h-full rounded-full bg-sky transition-all"
-                      style={{ width: `${Math.round(item.progress * 100)}%` }}
-                    />
-                  </div>
-                )}
-              </div>
-              {(item.status === "ready" || item.status === "error") && !uploading && (
-                <button
-                  type="button"
-                  onClick={() => removeItem(item.id)}
-                  className="shrink-0 rounded-full p-1.5 text-sand/40 transition hover:text-coral"
-                  aria-label="Rimuovi"
-                >
-                  <CloseIcon />
+          <div className="flex items-center justify-between gap-2 px-1">
+            <h2 className="whitespace-nowrap text-sm font-semibold text-sand/70">Registrazioni</h2>
+            <div className="flex items-center gap-3 whitespace-nowrap">
+              {doneCount > 0 && (
+                <button type="button" onClick={clearDone} className="text-xs text-sand/40 hover:text-sand/70">
+                  Pulisci
                 </button>
               )}
+              <Toggle checked={autoUpload} onChange={setAutoUpload} label="⚡ Carica da solo" />
             </div>
+          </div>
+          {items.map((item) => (
+            <QueueRow
+              key={item.id}
+              item={item}
+              who={who}
+              uploading={uploading}
+              quick={quick}
+              onOpenPicker={() => setPicker({ itemId: item.id })}
+            />
           ))}
         </section>
       )}
@@ -317,36 +332,187 @@ export default function Home() {
         </div>
       )}
 
-      {/* Barra azione fissa */}
-      {pendingCount > 0 && (
+      {/* Barra azione fissa: solo se c'è qualcosa da caricare a mano o da riprovare */}
+      {waiting.length > 0 && (
         <div className="fixed inset-x-0 bottom-[calc(3.5rem+env(safe-area-inset-bottom))] z-40 border-t border-dark-border bg-dark-bg/90 px-4 py-3 backdrop-blur">
           <div className="mx-auto max-w-md">
             <button
               type="button"
-              onClick={() => uploadAll({ who, pin })}
-              disabled={uploading || recording}
+              onClick={() => uploadAll()}
+              disabled={uploading}
               className="w-full rounded-xl bg-gradient-to-r from-flamingo to-tangerine px-4 py-3.5 text-base font-semibold text-white shadow-lg transition active:scale-[0.99] disabled:opacity-60"
             >
               {uploading
                 ? "Caricamento in corso…"
-                : recording
-                  ? "Ferma la registrazione per caricare"
-                  : `Carica ${pendingCount} file su Drive`}
+                : errors === waiting.length
+                  ? `Riprova ${errors} file`
+                  : `Carica ${waiting.length} file su Drive`}
             </button>
           </div>
         </div>
       )}
 
-      {allDone && !uploading && (
-        <div className="fixed inset-x-0 bottom-[calc(3.5rem+env(safe-area-inset-bottom))] z-40 border-t border-lime/30 bg-dark-bg/90 px-4 py-4 text-center backdrop-blur">
-          <p className="font-semibold text-lime">Tutto caricato ✓</p>
-        </div>
+      {picker && (
+        <LabelPicker
+          title={
+            "next" in picker
+              ? recording
+                ? "Cosa state suonando? 🎶"
+                : "Cosa state per suonare? 🎶"
+              : picker.justRecorded
+                ? pickFor(picker.itemId, ["Registrata ✓ Che pezzo era? 🎶", "Presa! Che pezzo era? 🤘", "Fatto ✓ Come la chiamiamo? 🎶"])
+                : pickFor(picker.itemId, ["Che pezzo era? 🎶", "Com'è che si chiama? 🎶", "Che pezzo era? 🤘"])
+          }
+          current={"next" in picker ? nextLabel : (pickerItem?.label ?? "")}
+          onPick={(l) => ("next" in picker ? setNextLabel(l) : setItemLabel(picker.itemId, l))}
+          onClose={() => setPicker(null)}
+          laterLabel={"itemId" in picker && picker.justRecorded ? "Più tardi 👋 (resta in coda senza nome)" : undefined}
+        />
       )}
     </main>
   );
 }
 
+/* ---------- riga della coda ---------- */
+
+function QueueRow({
+  item,
+  who,
+  uploading,
+  quick,
+  onOpenPicker,
+}: {
+  item: QueueItem;
+  who: string;
+  uploading: boolean;
+  quick: { title: string; emoji?: string }[];
+  onOpenPicker: () => void;
+}) {
+  const song = item.label ? findSong(item.label) : null;
+  const kind = item.subfolder === "video" ? "🎬" : item.subfolder === "foto" ? "📸" : null;
+  const status =
+    item.status === "uploading"
+      ? `${Math.round(item.progress * 100)}%`
+      : item.status === "done"
+        ? item.renaming
+          ? "rinomino su Drive…"
+          : pickFor(item.id, CHEERS)
+        : item.status === "ready"
+          ? "in attesa"
+          : null;
+
+  return (
+    <div className={`card flex flex-col gap-2 p-3 ${!item.label && item.status !== "error" ? "border-sky/30" : ""}`}>
+      <div className="flex items-center gap-3">
+        <StatusDot status={item.status} />
+        <div className="min-w-0 flex-1">
+          <button
+            type="button"
+            onClick={onOpenPicker}
+            className="flex max-w-full items-center gap-1.5 text-left"
+            aria-label={item.label ? `Pezzo: ${item.label}. Cambia` : "Dai un nome al pezzo"}
+          >
+            {item.label ? (
+              <span className="truncate text-[15px] font-semibold">
+                {kind ?? song?.emoji ?? "🎵"} {item.label}
+              </span>
+            ) : (
+              <span className="truncate text-[15px] font-semibold text-sky">
+                {kind ? `${kind} ` : ""}
+                {pickFor(item.id, MYSTERY)}
+              </span>
+            )}
+            <PencilIcon />
+          </button>
+          <p className="truncate text-xs text-sand/50">
+            {[`ore ${item.time.slice(0, 5).replace(".", ":")}`, who && memberLabel(who), formatBytes(item.size), status]
+              .filter(Boolean)
+              .join(" · ")}
+          </p>
+          {item.error && <p className="mt-0.5 text-xs text-coral">{item.error}</p>}
+        </div>
+        {item.status === "error" && !uploading && (
+          <button
+            type="button"
+            onClick={() => retryItem(item.id)}
+            className="shrink-0 rounded-lg bg-coral/15 px-2.5 py-1.5 text-xs font-semibold text-coral"
+          >
+            Riprova
+          </button>
+        )}
+        {item.status === "done" && item.error && !item.renaming && (
+          <button
+            type="button"
+            onClick={() => retryItem(item.id)}
+            className="shrink-0 rounded-lg bg-coral/15 px-2.5 py-1.5 text-xs font-semibold text-coral"
+          >
+            Riprova
+          </button>
+        )}
+        {(item.status === "ready" || item.status === "error") && !uploading && (
+          <button
+            type="button"
+            onClick={() => removeItem(item.id)}
+            className="shrink-0 rounded-full p-1.5 text-sand/40 transition hover:text-coral"
+            aria-label="Rimuovi"
+          >
+            <CloseIcon />
+          </button>
+        )}
+      </div>
+
+      {item.status === "uploading" && (
+        <div className="h-1.5 w-full overflow-hidden rounded-full bg-dark-bg">
+          <div
+            className="h-full rounded-full bg-sky transition-all"
+            style={{ width: `${Math.round(item.progress * 100)}%` }}
+          />
+        </div>
+      )}
+
+      {/* Nome in un tocco: i pezzi più probabili + "altro" */}
+      {!item.label && item.subfolder !== "foto" && (
+        <div className="flex flex-wrap gap-1.5">
+          {quick.map((q) => (
+            <button
+              key={q.title}
+              type="button"
+              onClick={() => setItemLabel(item.id, q.title)}
+              className="chip chip-off !px-2.5 !py-1 text-xs"
+            >
+              {q.emoji && <span aria-hidden>{q.emoji}</span>} {q.title}
+            </button>
+          ))}
+          <button type="button" onClick={onOpenPicker} className="chip chip-off !px-2.5 !py-1 text-xs text-sky">
+            Altro…
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 /* ---------- piccoli componenti di supporto ---------- */
+
+function Toggle({ checked, onChange, label }: { checked: boolean; onChange: (v: boolean) => void; label: string }) {
+  return (
+    <label className="flex cursor-pointer select-none items-center gap-2 text-xs text-sand/60">
+      {label}
+      <button
+        type="button"
+        role="switch"
+        aria-checked={checked}
+        aria-label={label}
+        onClick={() => onChange(!checked)}
+        className={`relative h-5 w-9 rounded-full transition ${checked ? "bg-sky" : "bg-dark-border"}`}
+      >
+        <span
+          className={`absolute top-0.5 h-4 w-4 rounded-full bg-white transition-all ${checked ? "left-[18px]" : "left-0.5"}`}
+        />
+      </button>
+    </label>
+  );
+}
 
 function StatusDot({ status }: { status: Status }) {
   const cls =
@@ -364,6 +530,15 @@ function PaperclipIcon() {
   return (
     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
       <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />
+    </svg>
+  );
+}
+
+function PencilIcon() {
+  return (
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="shrink-0 text-sand/30">
+      <path d="M12 20h9" />
+      <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z" />
     </svg>
   );
 }

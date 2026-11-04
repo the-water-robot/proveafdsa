@@ -3,6 +3,7 @@
 import { OAuth2Client } from "google-auth-library";
 import { folderNameForDate } from "./format";
 import { defaultMeta, sanitizeMeta, type ProvaMeta } from "./band";
+import { labelOf } from "./recording";
 
 const DRIVE = "https://www.googleapis.com/drive/v3";
 const UPLOAD = "https://www.googleapis.com/upload/drive/v3";
@@ -441,4 +442,60 @@ export async function writeMeta(folderId: string, meta: ProvaMeta): Promise<void
     body: multipart,
   });
   if (!res.ok) throw new Error(`Drive (create meta) ${res.status}: ${await res.text()}`);
+}
+
+/* ─────────────────────────  Repertorio: titoli usati nelle prove recenti  ───────────────────────── */
+
+export interface SongSuggestion {
+  title: string;
+  count: number; // quante registrazioni lo usano
+  last: string; // data (nome cartella) dell'ultima volta
+}
+
+let songsCache: { at: number; songs: SongSuggestion[] } | null = null;
+
+/** Titoli dei pezzi dalle ultime `maxFolders` prove, ordinati per frequenza e recenza. Cache 10 min. */
+export async function listRecentSongs(maxFolders = 12): Promise<SongSuggestion[]> {
+  if (songsCache && Date.now() - songsCache.at < 10 * 60 * 1000) return songsCache.songs;
+  const folders = (await listRehearsalFolders()).slice(0, maxFolders);
+  if (!folders.length) return [];
+  const nameById = new Map(folders.map((f) => [f.id, f.name]));
+  const token = await accessToken();
+  const q =
+    `(${folders.map((f) => `'${f.id}' in parents`).join(" or ")}) ` +
+    `and mimeType contains 'audio/' and trashed = false`;
+  const res = await driveFetch(
+    token,
+    `${DRIVE}/files?q=${encodeURIComponent(q)}&fields=files(name,parents)&pageSize=1000` +
+      `&supportsAllDrives=true&includeItemsFromAllDrives=true`,
+  );
+  if (!res.ok) throw new Error(`Drive (repertorio) ${res.status}: ${await res.text()}`);
+  const j = (await res.json()) as { files?: { name: string; parents?: string[] }[] };
+
+  const byKey = new Map<string, SongSuggestion>();
+  for (const f of j.files ?? []) {
+    const title = labelOf(f.name).replace(/\s*\(?\s*taglio\s*\)?$/i, "").replace(/\s+—\s+taglio$/i, "").trim();
+    // scarta etichette troppo corte/strane ("d", "d — d") o troppo lunghe
+    if (!title || title.length > 40 || title.replace(/[^\p{L}]/gu, "").length < 3) continue;
+    if (new Set(title.toLowerCase().split(/\s*—\s*/)).size < title.split(/\s*—\s*/).length) continue;
+    const key = title.toLowerCase();
+    const day = nameById.get(f.parents?.[0] ?? "") ?? "";
+    const cur = byKey.get(key);
+    if (cur) {
+      cur.count++;
+      if (day > cur.last) cur.last = day;
+    } else {
+      byKey.set(key, { title, count: 1, last: day });
+    }
+  }
+  const songs = Array.from(byKey.values()).sort(
+    (a, b) => b.last.localeCompare(a.last) || b.count - a.count || a.title.localeCompare(b.title),
+  );
+  songsCache = { at: Date.now(), songs };
+  return songs;
+}
+
+/** Da chiamare dopo un upload/rinomina: il repertorio va ricalcolato. */
+export function invalidateSongs() {
+  songsCache = null;
 }
