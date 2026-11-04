@@ -147,7 +147,7 @@ export default function Home() {
           <h1 className="font-display text-2xl font-bold leading-tight">Prove</h1>
           <p className="text-sm text-sand/60">Animali Fantastici del Sud America</p>
         </div>
-        <span className="text-xs text-sand/30 font-mono">v18</span>
+        <span className="text-xs text-sand/30 font-mono">v19</span>
       </header>
 
       {configMissing && configMissing.length > 0 && (
@@ -532,8 +532,8 @@ function ImportHelp({ platform }: { platform: "ios" | "android" | "other" }) {
               <b>Carica su Prove AFdSA</b>.
             </li>
             <li>
-              La prima volta iPhone chiede il permesso di collegarsi: <b>Consenti sempre</b>. Finisce nella prova di
-              oggi, col nome del memo come titolo del pezzo 🎶
+              Scegli <b>di che prova è</b> (oggi, ieri o una delle ultime prove) e via 🎶 La prima volta iPhone
+              chiede il permesso di collegarsi: <b>Consenti sempre</b>.
             </li>
           </ol>
           <p className="text-[12px] text-sand/40">

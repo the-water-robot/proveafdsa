@@ -5,7 +5,7 @@ import { splitNameExt } from "./format";
 import { REPERTOIRE, type RepertoireSong } from "./repertoire";
 
 const TIME_RE = /^\d{2}\.\d{2}\.\d{2}$/;
-const GENERIC_RE = /^(prova|video|foto|file|condiviso.*|registrazione.*|new recording.*|audio)$/i;
+const GENERIC_RE = /^(prova|video|foto|file|memo|condiviso.*|registrazione.*|new recording.*|audio)$/i;
 
 function parts(name: string): string[] {
   const base = splitNameExt(name).base || name;
