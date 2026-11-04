@@ -87,6 +87,8 @@ export default function ProveList() {
     };
   }, []);
 
+  const bestTotal = folders?.reduce((n, f) => n + (sums[f.id]?.best ?? 0), 0) ?? 0;
+
   return (
     <main className="pb-tabbar mx-auto flex min-h-[100dvh] max-w-md flex-col gap-4 px-4 pt-safe">
       <header className="flex items-center gap-3">
@@ -111,6 +113,22 @@ export default function ProveList() {
         <p className="card p-5 text-sm text-sand/60">
           Ancora nessuna prova. Vai su <b>Carica</b> per iniziare.
         </p>
+      )}
+
+      {folders && folders.length > 0 && (
+        <Link
+          href="/prove/meglio"
+          className="card flex items-center gap-3 border-solar/30 bg-solar/5 p-4 transition active:scale-[0.99]"
+        >
+          <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-solar/15 text-lg">⭐</div>
+          <div className="min-w-0 flex-1">
+            <p className="font-display text-base font-semibold">Il meglio</p>
+            <p className="text-xs text-sand/50">
+              {bestTotal ? `${bestTotal} take da riascoltare, da tutte le prove` : "Le take più votate di tutte le prove"}
+            </p>
+          </div>
+          <ChevronGlyph />
+        </Link>
       )}
 
       <ul className="flex flex-col gap-2">
@@ -151,6 +169,11 @@ function FolderCard({ folder, sum, updating }: { folder: DriveFolder; sum?: Fold
                   <Count n={sum.audio} icon="🎵" label="audio" />
                   <Count n={sum.photos} icon="📸" label="foto" />
                   <Count n={sum.videos} icon="🎬" label="video" />
+                  {sum.best > 0 && (
+                    <span className="whitespace-nowrap font-semibold text-solar" aria-label={`${sum.best} da riascoltare`}>
+                      ⭐ {sum.best}
+                    </span>
+                  )}
                 </>
               )}
               {info.length > 0 && <span className="truncate text-sand/40">{info.join(" · ")}</span>}

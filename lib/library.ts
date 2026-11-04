@@ -2,6 +2,7 @@
 // Tutte le chiamate passano da un fetch con retry: i blip transitori (cold-start della funzione,
 // 5xx momentanei) vengono ritentati e non disturbano l'utente.
 import type { ProvaMeta } from "./band";
+import type { Ratings } from "./ratings";
 
 export interface DriveFolder {
   id: string;
@@ -13,6 +14,8 @@ export interface AudioFile {
   mimeType: string;
   size: number;
   modifiedTime?: string;
+  ratings?: Ratings;
+  folder?: { id: string; name: string }; // solo nelle liste multi-prova ("Il meglio")
 }
 export interface MediaFile {
   id: string;
@@ -76,6 +79,7 @@ export async function saveMeta(folder: string, meta: ProvaMeta, pin?: string): P
 
 export interface FolderSummary {
   id: string;
+  best: number;
   audio: number;
   photos: number;
   videos: number;
@@ -84,6 +88,20 @@ export interface FolderSummary {
 
 export async function fetchSummaries(ids: string[]): Promise<FolderSummary[]> {
   return (await jsonOrThrow(await fetchRetry(`/api/summary?ids=${ids.map(encodeURIComponent).join(",")}`))).summaries;
+}
+
+/** Vota (1..5) o togli il voto (0). Ritorna i voti aggiornati di tutti. */
+export async function rateTrack(id: string, who: string, stars: number): Promise<Ratings> {
+  const res = await fetchRetry("/api/rating", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ id, who, stars, pin: storedPin() }),
+  });
+  return (await jsonOrThrow(res)).ratings;
+}
+
+export async function fetchBest(): Promise<AudioFile[]> {
+  return (await jsonOrThrow(await fetchRetry("/api/best"))).tracks;
 }
 
 export async function fetchMedia(folder: string): Promise<MediaFile[]> {

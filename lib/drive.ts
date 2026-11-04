@@ -5,6 +5,7 @@ import { folderNameForDate } from "./format";
 import { defaultMeta, sanitizeMeta, type ProvaMeta } from "./band";
 import { labelOf } from "./recording";
 import { kindOf, mimeFor } from "./mime";
+import { BEST_MIN, average, ratingKey, ratingsFromProps, type Ratings } from "./ratings";
 
 const DRIVE = "https://www.googleapis.com/drive/v3";
 const UPLOAD = "https://www.googleapis.com/upload/drive/v3";
@@ -208,6 +209,8 @@ export interface AudioFile {
   mimeType: string;
   size: number;
   modifiedTime?: string;
+  ratings?: Ratings;
+  folder?: { id: string; name: string }; // solo nelle liste multi-prova ("Il meglio")
 }
 export interface MediaFile {
   id: string;
@@ -245,6 +248,7 @@ interface RawFile {
   modifiedTime?: string;
   hasThumbnail?: boolean;
   parents?: string[];
+  appProperties?: Record<string, string>;
 }
 
 /** File (non cartelle) dentro una o più cartelle, ordinati per nome (= orario in testa). */
@@ -259,7 +263,7 @@ async function listChildren(token: string, parentIds: string[]): Promise<RawFile
     const res = await driveFetch(
       token,
       `${DRIVE}/files?q=${encodeURIComponent(q)}` +
-        `&fields=nextPageToken,files(id,name,mimeType,size,modifiedTime,hasThumbnail,parents)` +
+        `&fields=nextPageToken,files(id,name,mimeType,size,modifiedTime,hasThumbnail,parents,appProperties)` +
         `&orderBy=name&pageSize=1000&supportsAllDrives=true&includeItemsFromAllDrives=true` +
         (pageToken ? `&pageToken=${pageToken}` : ""),
     );
@@ -291,6 +295,7 @@ export async function listAudioFiles(folderId: string): Promise<AudioFile[]> {
     mimeType: mimeFor(f.name, f.mimeType),
     size: Number(f.size ?? 0),
     modifiedTime: f.modifiedTime,
+    ratings: ratingsFromProps(f.appProperties),
   }));
 }
 
@@ -546,6 +551,7 @@ export function invalidateSongs() {
 
 export interface FolderSummary {
   id: string;
+  best: number; // tracce con media ≥ BEST_MIN
   audio: number;
   photos: number;
   videos: number;
@@ -563,13 +569,15 @@ export async function summarizeFolders(ids: string[]): Promise<FolderSummary[]> 
   const token = await accessToken();
 
   const sum = new Map<string, FolderSummary>(
-    valid.map((id) => [id, { id, audio: 0, photos: 0, videos: 0, meta: defaultMeta() }]),
+    valid.map((id) => [id, { id, best: 0, audio: 0, photos: 0, videos: 0, meta: defaultMeta() }]),
   );
   const count = (s: FolderSummary | undefined, f: RawFile) => {
     if (!s || f.name === META_NAME) return;
     const k = kindOf(f.name, f.mimeType);
-    if (k === "audio") s.audio++;
-    else if (k === "image") s.photos++;
+    if (k === "audio") {
+      s.audio++;
+      if ((average(ratingsFromProps(f.appProperties)) ?? 0) >= BEST_MIN) s.best++;
+    } else if (k === "image") s.photos++;
     else if (k === "video") s.videos++;
   };
 
@@ -603,4 +611,61 @@ export async function summarizeFolders(ids: string[]): Promise<FolderSummary[]> 
       }),
   ]);
   return valid.map((id) => sum.get(id)!);
+}
+
+/* ─────────────────  Voti a stelle  ───────────────── */
+
+/** Imposta (1..5) o toglie (0) il voto di un membro su un file. Ritorna tutti i voti aggiornati. */
+export async function setRating(fileId: string, who: string, stars: number): Promise<Ratings> {
+  const token = await accessToken();
+  const res = await driveFetch(token, `${DRIVE}/files/${fileId}?fields=appProperties&supportsAllDrives=true`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    // null cancella la proprietà; gli altri voti non vengono toccati
+    body: JSON.stringify({ appProperties: { [ratingKey(who)]: stars ? String(stars) : null } }),
+  });
+  if (!res.ok) throw new Error(`Drive (voto) ${res.status}: ${await res.text()}`);
+  bestCache = null;
+  return ratingsFromProps(((await res.json()) as { appProperties?: Record<string, string> }).appProperties);
+}
+
+let bestCache: { at: number; tracks: AudioFile[] } | null = null;
+
+/** Le tracce migliori (media ≥ BEST_MIN) di tutte le prove, dalla media più alta. Cache 1 min. */
+export async function listBestTracks(): Promise<AudioFile[]> {
+  if (bestCache && Date.now() - bestCache.at < 60_000) return bestCache.tracks;
+  const folders = await listRehearsalFolders();
+  const nameById = new Map(folders.map((f) => [f.id, f.name]));
+  const token = await accessToken();
+  const out: AudioFile[] = [];
+  // Drive non sa filtrare "qualsiasi voto": si leggono i file audio a gruppi di cartelle e si filtra qui
+  for (let i = 0; i < folders.length; i += 25) {
+    const ids = folders.slice(i, i + 25).map((f) => f.id);
+    const files = await listChildren(token, ids);
+    for (const f of files) {
+      if (kindOf(f.name, f.mimeType) !== "audio") continue;
+      const ratings = ratingsFromProps(f.appProperties);
+      if ((average(ratings) ?? 0) < BEST_MIN) continue;
+      const fid = f.parents?.[0] ?? "";
+      insideRoot.set(f.id, { id: f.id, name: f.name, mimeType: f.mimeType });
+      out.push({
+        id: f.id,
+        name: f.name,
+        mimeType: mimeFor(f.name, f.mimeType),
+        size: Number(f.size ?? 0),
+        modifiedTime: f.modifiedTime,
+        ratings,
+        folder: { id: fid, name: nameById.get(fid) ?? "" },
+      });
+    }
+  }
+  out.sort(
+    (a, b) =>
+      (average(b.ratings) ?? 0) - (average(a.ratings) ?? 0) ||
+      Object.keys(b.ratings ?? {}).length - Object.keys(a.ratings ?? {}).length ||
+      (b.folder?.name ?? "").localeCompare(a.folder?.name ?? "") ||
+      a.name.localeCompare(b.name),
+  );
+  bestCache = { at: Date.now(), tracks: out };
+  return out;
 }

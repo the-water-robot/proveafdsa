@@ -1,12 +1,14 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { AudioFile } from "@/lib/library";
-import { deleteDriveFile, renameDriveFile, streamUrl } from "@/lib/library";
+import { deleteDriveFile, rateTrack, renameDriveFile, streamUrl } from "@/lib/library";
 import { formatBytes, prettyFolderDate, splitNameExt } from "@/lib/format";
 import { findSong, labelOf, recordedAt, recordedBy, relabel, songTitle } from "@/lib/recording";
 import { CANZONIERE_URL } from "@/lib/repertoire";
 import LabelPicker from "@/components/LabelPicker";
+import { StarRating, WhoPicker, useWho } from "@/components/Stars";
+import { average, type Ratings } from "@/lib/ratings";
 import TrimModal from "@/components/TrimModal";
 
 function mmss(s: number): string {
@@ -22,12 +24,32 @@ function prettyName(name: string): string {
 
 export default function AudioPlayer({
   tracks: initial,
-  folderName,
+  folderName = "",
+  initialSortBest = false,
 }: {
   tracks: AudioFile[];
-  folderName: string;
+  folderName?: string; // vuoto nelle liste multi-prova: ogni traccia ha il suo `folder`
+  initialSortBest?: boolean;
 }) {
   const [tracks, setTracks] = useState<AudioFile[]>(initial);
+  const [sortBest, setSortBest] = useState(initialSortBest);
+  // ordine di ascolto: cronologico, oppure "migliori prima" (media, poi numero di voti)
+  const ordered = useMemo(
+    () =>
+      sortBest
+        ? [...tracks].sort(
+            (a, b) =>
+              (average(b.ratings) ?? -1) - (average(a.ratings) ?? -1) ||
+              Object.keys(b.ratings ?? {}).length - Object.keys(a.ratings ?? {}).length,
+          )
+        : tracks,
+    [tracks, sortBest],
+  );
+  const anyRated = tracks.some((t) => Object.keys(t.ratings ?? {}).length > 0);
+  const [me, setMe] = useWho();
+  const [askWho, setAskWho] = useState<{ id: string; stars: number } | null>(null);
+  const [ratingBusy, setRatingBusy] = useState<string | null>(null);
+  const folderOf = (t: AudioFile) => t.folder?.name ?? folderName;
   const audioRef = useRef<HTMLAudioElement>(null);
   // Traccia corrente per id (non per indice: eliminando/aggiungendo file l'indice slitterebbe)
   const [currentId, setCurrentId] = useState<string | null>(null);
@@ -54,13 +76,13 @@ export default function AudioPlayer({
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [deleteBusy, setDeleteBusy] = useState(false);
 
-  const index = currentId ? tracks.findIndex((t) => t.id === currentId) : -1;
-  const current = index >= 0 ? tracks[index] : null;
+  const index = currentId ? ordered.findIndex((t) => t.id === currentId) : -1;
+  const current = index >= 0 ? ordered[index] : null;
   const currentSong = current ? findSong(songTitle(current.name)) : null;
 
   // Ref per i gestori di eventi media / Media Session (non devono vedere stato vecchio)
-  const tracksRef = useRef(tracks);
-  tracksRef.current = tracks;
+  const tracksRef = useRef(ordered);
+  tracksRef.current = ordered;
   const currentIdRef = useRef<string | null>(null);
   const fixingDurRef = useRef(false); // sto ricavando la durata di un webm che non la dichiara
   const wantPlayRef = useRef(false);
@@ -211,13 +233,34 @@ export default function AudioPlayer({
     navigator.mediaSession.metadata = new MediaMetadata({
       title: songTitle(current.name),
       artist: "Animali Fantastici del Sud America",
-      album: `Prova · ${prettyFolderDate(folderName)}`,
+      album: `Prova · ${prettyFolderDate(folderOf(current))}`,
       artwork: [
         { src: "/icons/icon-192.png", sizes: "192x192", type: "image/png" },
         { src: "/icons/icon-512.png", sizes: "512x512", type: "image/png" },
       ],
     });
   }, [current?.id, current?.name, folderName]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  /* ─── Voti ─── */
+  async function rate(id: string, stars: number, who = me) {
+    if (!who) return setAskWho({ id, stars });
+    const before = tracks.find((t) => t.id === id)?.ratings ?? {};
+    const optimistic: Ratings = { ...before };
+    if (stars) optimistic[who] = stars;
+    else delete optimistic[who];
+    setTracks((prev) => prev.map((t) => (t.id === id ? { ...t, ratings: optimistic } : t)));
+    setRatingBusy(id);
+    setActionError(null);
+    try {
+      const saved = await rateTrack(id, who, stars);
+      setTracks((prev) => prev.map((t) => (t.id === id ? { ...t, ratings: saved } : t)));
+    } catch (e) {
+      setTracks((prev) => prev.map((t) => (t.id === id ? { ...t, ratings: before } : t)));
+      setActionError({ id, msg: e instanceof Error ? e.message : "Voto non salvato" });
+    } finally {
+      setRatingBusy(null);
+    }
+  }
 
   /* ─── Delete ─── */
   async function doDelete(id: string) {
@@ -306,8 +349,21 @@ export default function AudioPlayer({
         hidden
       />
 
+      {anyRated && (
+        <div className="flex justify-end">
+          <button
+            type="button"
+            onClick={() => setSortBest((v) => !v)}
+            aria-pressed={sortBest}
+            className={`chip !py-1 text-xs ${sortBest ? "chip-on" : "chip-off"}`}
+          >
+            ⭐ {sortBest ? "Migliori prima" : "Ordina: migliori prima"}
+          </button>
+        </div>
+      )}
+
       <ol className="flex flex-col gap-1.5">
-        {tracks.map((t, i) => {
+        {ordered.map((t, i) => {
           const active = i === index;
           const bad = failed.has(t.id);
           const isEdit = editId === t.id;
@@ -316,7 +372,8 @@ export default function AudioPlayer({
           return (
             <li key={t.id}>
               {/* Riga principale */}
-              <div className={`card flex items-center gap-3 p-3 ${active ? "ring-1 ring-flamingo/50" : ""}`}>
+              <div className={`card flex flex-col gap-2 p-3 ${active ? "ring-1 ring-flamingo/50" : ""}`}>
+              <div className="flex items-center gap-3">
                 <button
                   type="button"
                   onClick={() => selectTrack(i)}
@@ -337,7 +394,14 @@ export default function AudioPlayer({
                   <p className="text-xs text-sand/50">
                     {active && dur > 0
                       ? `${mmss(time)} / ${mmss(dur)}`
-                      : [recordedAt(t.name), recordedBy(t.name), formatBytes(t.size)].filter(Boolean).join(" · ")}
+                      : [
+                          t.folder ? prettyFolderDate(t.folder.name, false) : null,
+                          recordedAt(t.name),
+                          recordedBy(t.name),
+                          t.folder ? null : formatBytes(t.size),
+                        ]
+                          .filter(Boolean)
+                          .join(" · ")}
                     {bad && <span className="text-coral"> · non riproducibile, scarica ▾</span>}
                   </p>
                 </button>
@@ -366,6 +430,15 @@ export default function AudioPlayer({
                 >
                   <TrashGlyph />
                 </button>
+              </div>
+              <div className="pl-12">
+                <StarRating
+                  ratings={t.ratings}
+                  me={me}
+                  busy={ratingBusy === t.id}
+                  onRate={(n) => rate(t.id, n)}
+                />
+              </div>
               </div>
 
               {actionError?.id === t.id && (
@@ -444,6 +517,18 @@ export default function AudioPlayer({
         })}
       </ol>
 
+      {askWho && (
+        <WhoPicker
+          onClose={() => setAskWho(null)}
+          onPick={(w) => {
+            setMe(w);
+            const pending = askWho;
+            setAskWho(null);
+            rate(pending.id, pending.stars, w);
+          }}
+        />
+      )}
+
       {labelFor && (
         <LabelPicker
           title="Che pezzo è? 🎶"
@@ -457,7 +542,7 @@ export default function AudioPlayer({
       {trimTrack && (
         <TrimModal
           track={trimTrack}
-          folderName={folderName}
+          folderName={folderOf(trimTrack)}
           onClose={() => setTrimTrack(null)}
           onOverwrite={(updated) => {
             setTracks((prev) => prev.map((t) => (t.id === updated.id ? updated : t)));
@@ -490,6 +575,15 @@ export default function AudioPlayer({
             <p className="shrink-0 font-mono text-xs tabular-nums text-sand/50">
               {loading ? "carico…" : `${mmss(time)} / ${dur > 0 ? mmss(dur) : "–:––"}`}
             </p>
+          </div>
+          <div className="px-1">
+            <StarRating
+              compact
+              ratings={current.ratings}
+              me={me}
+              busy={ratingBusy === current.id}
+              onRate={(n) => rate(current.id, n)}
+            />
           </div>
           <input
             type="range"
@@ -560,7 +654,7 @@ export default function AudioPlayer({
             <button
               type="button"
               onClick={() => step(1)}
-              disabled={index >= tracks.length - 1}
+              disabled={index >= ordered.length - 1}
               className="flex h-10 w-10 items-center justify-center text-sand transition disabled:opacity-30"
               aria-label="Pezzo successivo"
             >
