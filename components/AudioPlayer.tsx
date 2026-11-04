@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import type { AudioFile } from "@/lib/library";
 import { deleteDriveFile, renameDriveFile, streamUrl } from "@/lib/library";
 import { formatBytes, prettyFolderDate, splitNameExt } from "@/lib/format";
+import { isMember, memberLabel } from "@/lib/band";
 import TrimModal from "@/components/TrimModal";
 
 function mmss(s: number): string {
@@ -25,7 +26,14 @@ function songTitle(name: string): string {
   const parts = prettyName(name).split(" — ").map((p) => p.trim()).filter(Boolean);
   if (parts.length > 1 && /^\d{2}\.\d{2}\.\d{2}$/.test(parts[0])) parts.shift();
   if (parts.length > 1 && /^(prova|video|foto)$/i.test(parts[parts.length - 1])) parts.pop();
+  if (parts.length > 1 && isMember(parts[0])) parts.shift(); // "pit — Rosa" → "Rosa" (chi è mostrato a parte)
   return parts.join(" — ") || prettyName(name);
+}
+/** Chi ha registrato (secondo segmento del nome, se è un membro della band). */
+function recordedBy(name: string): string {
+  const parts = prettyName(name).split(" — ").map((p) => p.trim());
+  const i = /^\d{2}\.\d{2}\.\d{2}$/.test(parts[0] ?? "") ? 1 : 0;
+  return parts.length > i + 1 && isMember(parts[i]) ? memberLabel(parts[i]) : "";
 }
 
 /* ─── Componente principale ─── */
@@ -43,6 +51,7 @@ export default function AudioPlayer({
   const [currentId, setCurrentId] = useState<string | null>(null);
   const [actionError, setActionError] = useState<{ id: string; msg: string } | null>(null);
   const [playing, setPlaying] = useState(false);
+  const [loading, setLoading] = useState(false); // in attesa di dati (avvio, salto, rete lenta)
   const [time, setTime] = useState(0);
   const [dur, setDur] = useState(0);
   const [failed, setFailed] = useState<Set<string>>(new Set());
@@ -82,6 +91,7 @@ export default function AudioPlayer({
     a.src = streamUrl(t.id, false, t.modifiedTime);
     setTime(0);
     setDur(0);
+    setLoading(autoplay);
     if (autoplay) a.play().catch(() => setPlaying(false));
   }
   function setIndex(i: number) {
@@ -110,7 +120,8 @@ export default function AudioPlayer({
     if (!currentIdRef.current) return setIndex(0);
     if (a.paused) {
       wantPlayRef.current = true;
-      a.play().catch(() => {});
+      if (a.readyState < 3) setLoading(true);
+      a.play().catch(() => setLoading(false));
     } else {
       wantPlayRef.current = false;
       a.pause();
@@ -126,6 +137,7 @@ export default function AudioPlayer({
   function onError() {
     if (current) setFailed((s) => new Set(s).add(current.id));
     setPlaying(false);
+    setLoading(false);
   }
 
   /* ─── Durata: i webm registrati dal browser non la dichiarano (durata "infinita") ─── */
@@ -146,6 +158,7 @@ export default function AudioPlayer({
     setDur(a.duration);
     if (fixingDurRef.current) {
       fixingDurRef.current = false;
+      setLoading(false); // se serve altro buffering arriverà un nuovo "waiting"
       a.currentTime = 0;
       if (wantPlayRef.current && a.paused) a.play().catch(() => {});
     }
@@ -283,11 +296,15 @@ export default function AudioPlayer({
         onLoadedMetadata={onLoadedMetadata}
         onDurationChange={onDurationChange}
         onSeeked={syncPosition}
+        onWaiting={() => wantPlayRef.current && setLoading(true)}
+        onPlaying={() => !fixingDurRef.current && setLoading(false)}
+        onCanPlay={(e) => e.currentTarget.paused && !fixingDurRef.current && setLoading(false)}
         onEnded={onEnded}
         onError={onError}
         onPause={() => {
           if (fixingDurRef.current) return;
           setPlaying(false);
+          setLoading(false);
           if ("mediaSession" in navigator) navigator.mediaSession.playbackState = "paused";
         }}
         onPlay={() => {
@@ -313,9 +330,11 @@ export default function AudioPlayer({
                 <button
                   type="button"
                   onClick={() => selectTrack(i)}
-                  className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-flamingo to-tangerine text-white"
+                  className="relative flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-flamingo to-tangerine text-white"
                   aria-label={active && playing ? "Pausa" : "Riproduci"}
+                  aria-busy={active && loading}
                 >
+                  {active && loading && <Spinner />}
                   {active && playing ? <PauseGlyph /> : <PlayGlyph />}
                 </button>
 
@@ -324,7 +343,7 @@ export default function AudioPlayer({
                   <p className="text-xs text-sand/50">
                     {active && dur > 0
                       ? `${mmss(time)} / ${mmss(dur)}`
-                      : [recordedAt(t.name), formatBytes(t.size)].filter(Boolean).join(" · ")}
+                      : [recordedAt(t.name), recordedBy(t.name), formatBytes(t.size)].filter(Boolean).join(" · ")}
                     {bad && <span className="text-coral"> · non riproducibile, scarica ▾</span>}
                   </p>
                 </button>
@@ -446,7 +465,7 @@ export default function AudioPlayer({
           <div className="flex items-baseline justify-between gap-3 px-1">
             <p className="min-w-0 truncate text-sm font-semibold">{songTitle(current.name)}</p>
             <p className="shrink-0 font-mono text-xs tabular-nums text-sand/50">
-              {mmss(time)} / {dur > 0 ? mmss(dur) : "–:––"}
+              {loading ? "carico…" : `${mmss(time)} / ${dur > 0 ? mmss(dur) : "–:––"}`}
             </p>
           </div>
           <input
@@ -499,9 +518,11 @@ export default function AudioPlayer({
             <button
               type="button"
               onClick={togglePlay}
-              className="flex h-14 w-14 items-center justify-center rounded-full bg-gradient-to-br from-flamingo to-tangerine text-white shadow-lg transition active:scale-95"
+              className="relative flex h-14 w-14 items-center justify-center rounded-full bg-gradient-to-br from-flamingo to-tangerine text-white shadow-lg transition active:scale-95"
               aria-label={playing ? "Pausa" : "Riproduci"}
+              aria-busy={loading}
             >
+              {loading && <Spinner />}
               {playing ? <PauseGlyph big /> : <PlayGlyph big />}
             </button>
             <button
@@ -531,6 +552,15 @@ export default function AudioPlayer({
 }
 
 /* ─── Glyphs ─── */
+/** Anello che gira attorno al pulsante play mentre l'audio si carica. */
+function Spinner() {
+  return (
+    <span
+      aria-hidden
+      className="pointer-events-none absolute -inset-[5px] animate-spin rounded-full border-[3px] border-flamingo/20 border-t-sand"
+    />
+  );
+}
 function PlayGlyph({ big }: { big?: boolean }) {
   const s = big ? 22 : 16;
   return <svg width={s} height={s} viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z" /></svg>;

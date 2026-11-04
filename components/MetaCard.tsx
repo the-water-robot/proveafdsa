@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { MEMBERS, MOODS, moodById, type ProvaMeta } from "@/lib/band";
+import { INSTRUMENT, MEMBERS, MOODS, memberLabel, moodById, type ProvaMeta } from "@/lib/band";
 import { saveMeta } from "@/lib/library";
 
 const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
@@ -74,7 +74,7 @@ export default function MetaCard({
           {meta.present.length ? (
             meta.present.map((m) => (
               <span key={m} className="badge bg-lime/15 text-lime">
-                {cap(m)}
+                {memberLabel(m)}
               </span>
             ))
           ) : (
@@ -267,9 +267,11 @@ function Chips({ selected, onToggle }: { selected: string[]; onToggle: (m: strin
             key={m}
             type="button"
             onClick={() => onToggle(m)}
+            aria-pressed={on}
+            title={INSTRUMENT[m].label}
             className={`chip ${on ? "chip-on" : "chip-off"}`}
           >
-            {cap(m)}
+            <span aria-hidden>{INSTRUMENT[m].emoji}</span> {cap(m)}
           </button>
         );
       })}

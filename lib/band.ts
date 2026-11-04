@@ -3,6 +3,26 @@
 export const MEMBERS = ["pit", "dave", "marce", "brivido", "corra"] as const;
 export type Member = (typeof MEMBERS)[number];
 
+// Strumento di ciascuno (Unicode non ha un'emoji del basso: 🎻 fa da contrabbasso)
+export const INSTRUMENT: Record<Member, { emoji: string; label: string }> = {
+  pit: { emoji: "🎤", label: "voce" },
+  dave: { emoji: "🎸", label: "chitarra" },
+  marce: { emoji: "🥁", label: "batteria" },
+  brivido: { emoji: "🎺", label: "tromba" },
+  corra: { emoji: "🎻", label: "basso" },
+};
+
+export function isMember(s: string): s is Member {
+  return (MEMBERS as readonly string[]).includes(s.toLowerCase());
+}
+
+/** "pit" → "🎤 Pit" (nomi non in band: solo maiuscola iniziale). */
+export function memberLabel(name: string): string {
+  const cap = name.charAt(0).toUpperCase() + name.slice(1);
+  const key = name.toLowerCase();
+  return isMember(key) ? `${INSTRUMENT[key as Member].emoji} ${cap}` : cap;
+}
+
 export const MOODS = [
   { id: "top6", label: "Top 6", emoji: "🔥" },
   { id: "mirabilantiavventure", label: "Mirabilanti Avventure", emoji: "🗺️" },

@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import Link from "next/link";
 import Recorder from "@/components/Recorder";
-import { MEMBERS } from "@/lib/band";
+import { INSTRUMENT, MEMBERS } from "@/lib/band";
 import { extFromMime, formatBytes, prettyFolderDate, splitNameExt, todayIso } from "@/lib/format";
 import {
   addBlob,
@@ -123,7 +123,7 @@ export default function Home() {
           <h1 className="font-display text-2xl font-bold leading-tight">Prove</h1>
           <p className="text-sm text-sand/60">Animali Fantastici del Sud America</p>
         </div>
-        <span className="text-xs text-sand/30 font-mono">v13</span>
+        <span className="text-xs text-sand/30 font-mono">v14</span>
       </header>
 
       {configMissing && configMissing.length > 0 && (
@@ -185,9 +185,10 @@ export default function Home() {
                   type="button"
                   onClick={() => changeWho(on ? "" : m)}
                   aria-pressed={on}
+                  title={INSTRUMENT[m].label}
                   className={`chip ${on ? "chip-on" : "chip-off"}`}
                 >
-                  {cap(m)}
+                  <span aria-hidden>{INSTRUMENT[m].emoji}</span> {cap(m)}
                 </button>
               );
             })}
