@@ -7,6 +7,7 @@ import LabelPicker from "@/components/LabelPicker";
 import { INSTRUMENT, MEMBERS, memberLabel } from "@/lib/band";
 import { extFromMime, formatBytes, prettyFolderDate, splitNameExt, todayIso } from "@/lib/format";
 import { findSong, rankSuggestions } from "@/lib/recording";
+import { ACCEPT } from "@/lib/mime";
 import { useSongs } from "@/lib/songs";
 import {
   addBlob,
@@ -134,7 +135,7 @@ export default function Home() {
           <h1 className="font-display text-2xl font-bold leading-tight">Prove</h1>
           <p className="text-sm text-sand/60">Animali Fantastici del Sud America</p>
         </div>
-        <span className="text-xs text-sand/30 font-mono">v15</span>
+        <span className="text-xs text-sand/30 font-mono">v16</span>
       </header>
 
       {configMissing && configMissing.length > 0 && (
@@ -275,7 +276,7 @@ export default function Home() {
           ref={fileInputRef}
           type="file"
           multiple
-          accept="audio/*,video/*,image/*"
+          accept={ACCEPT}
           hidden
           onChange={(e) => {
             if (e.target.files?.length) addFiles(e.target.files);

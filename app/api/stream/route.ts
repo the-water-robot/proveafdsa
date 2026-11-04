@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { assertInRoot, errorStatus, streamFile } from "@/lib/drive";
+import { mimeFor } from "@/lib/mime";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -30,6 +31,9 @@ export async function GET(req: NextRequest) {
       if (v) headers.set(h, v);
     }
     if (!headers.has("accept-ranges")) headers.set("accept-ranges", "bytes");
+    // Il tipo salvato su Drive può essere sbagliato (es. .m4a come "audio/mpeg"): Safari/iPhone
+    // in quel caso rifiuta di riprodurre. Correggilo dall'estensione del file.
+    headers.set("content-type", mimeFor(info.name, upstream.headers.get("content-type") || info.mimeType));
     // L'URL include ?v=<modifiedTime> lato client: dopo un taglio/sovrascrittura cambia → niente cache stantia.
     headers.set("cache-control", "private, max-age=3600");
     if (download) {

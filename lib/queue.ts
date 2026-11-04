@@ -9,6 +9,7 @@ import { uploadOne } from "./upload";
 import { renameDriveFile } from "./library";
 import { rememberSong } from "./songs";
 import { buildFileName, timeLabel, todayIso } from "./format";
+import { kindOf } from "./mime";
 
 export type Status = "ready" | "uploading" | "done" | "error";
 
@@ -117,8 +118,8 @@ export function nameFor(item: QueueItem, who = state.who): string {
 }
 
 export function addBlob(file: Blob, base: string, ext: string): QueueItem {
-  const type = file.type || "";
-  const subfolder = type.startsWith("video/") ? "video" : type.startsWith("image/") ? "foto" : undefined;
+  const kind = kindOf(ext ? `x.${ext}` : "", file.type);
+  const subfolder = kind === "video" ? "video" : kind === "image" ? "foto" : undefined;
   const item: QueueItem = {
     id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
     file,

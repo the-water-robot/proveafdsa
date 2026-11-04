@@ -1,3 +1,5 @@
+import { mimeFor } from "./mime";
+
 // Utility lato CLIENT per l'upload in due passi:
 //  1) chiede al nostro server l'URL di sessione resumable;
 //  2) fa il PUT dei byte direttamente a Google (con barra di progresso via XHR).
@@ -80,10 +82,13 @@ export async function uploadOne(
   const session = await requestUploadSession({
     rehearsalDate: params.rehearsalDate,
     fileName: params.fileName,
-    mimeType: params.file.type || "application/octet-stream",
+    mimeType: mimeFor(params.fileName, params.file.type),
     subfolder: params.subfolder,
     pin: params.pin,
   });
-  const file = await putResumable(session.sessionUrl, params.file, onProgress);
+  const mime = mimeFor(params.fileName, params.file.type);
+  // se il tipo dichiarato dal telefono è sbagliato/vuoto, invia i byte col tipo corretto
+  const body = params.file.type === mime ? params.file : new Blob([params.file], { type: mime });
+  const file = await putResumable(session.sessionUrl, body, onProgress);
   return { ...session, file };
 }
