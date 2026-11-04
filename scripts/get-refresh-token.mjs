@@ -9,7 +9,7 @@
 // Poi:  npm run get-token   →  accedi col tuo account  →  copia il token stampato.
 
 import http from "node:http";
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { OAuth2Client } from "google-auth-library";
 
@@ -61,8 +61,15 @@ const server = http.createServer(async (req, res) => {
     server.close();
 
     if (tokens.refresh_token) {
-      console.log("\n✅ Token ottenuto! Incollalo in .env.local e nelle Environment Variables di Vercel:\n");
-      console.log(`GOOGLE_REFRESH_TOKEN=${tokens.refresh_token}\n`);
+      const envPath = new URL("../.env.local", import.meta.url);
+      let txt = existsSync(envPath) ? readFileSync(envPath, "utf8") : "";
+      const line = `GOOGLE_REFRESH_TOKEN=${tokens.refresh_token}`;
+      txt = /^GOOGLE_REFRESH_TOKEN=.*$/m.test(txt)
+        ? txt.replace(/^GOOGLE_REFRESH_TOKEN=.*$/m, line)
+        : txt + (txt.endsWith("\n") || !txt ? "" : "\n") + line + "\n";
+      writeFileSync(envPath, txt);
+      console.log("\n✅ Token ottenuto e salvato in .env.local (GOOGLE_REFRESH_TOKEN).");
+      console.log("   Ora aggiornalo anche nelle Environment Variables di Vercel.\n");
     } else {
       console.error(
         "\n⚠️  Nessun refresh_token restituito.\n" +
