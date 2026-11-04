@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { AudioFile } from "@/lib/library";
 import { deleteDriveFile, renameDriveFile, streamUrl } from "@/lib/library";
-import { formatBytes, splitNameExt } from "@/lib/format";
+import { formatBytes, prettyFolderDate, splitNameExt } from "@/lib/format";
 import TrimModal from "@/components/TrimModal";
 
 function mmss(s: number): string {
@@ -14,6 +14,18 @@ function mmss(s: number): string {
 }
 function prettyName(name: string): string {
   return splitNameExt(name).base || name;
+}
+/** "22.19.35 — Rosa — prova.webm" → "ore 22:19" */
+function recordedAt(name: string): string {
+  const m = /^(\d{2})\.(\d{2})\.\d{2}\b/.exec(name);
+  return m ? `ore ${m[1]}:${m[2]}` : "";
+}
+/** "22.19.35 — Rosa — prova.webm" → "Rosa" (titolo per auto / schermata di blocco). */
+function songTitle(name: string): string {
+  const parts = prettyName(name).split(" — ").map((p) => p.trim()).filter(Boolean);
+  if (parts.length > 1 && /^\d{2}\.\d{2}\.\d{2}$/.test(parts[0])) parts.shift();
+  if (parts.length > 1 && /^(prova|video|foto)$/i.test(parts[parts.length - 1])) parts.pop();
+  return parts.join(" — ") || prettyName(name);
 }
 
 /* ─── Componente principale ─── */
@@ -50,27 +62,43 @@ export default function AudioPlayer({
 
   const index = currentId ? tracks.findIndex((t) => t.id === currentId) : -1;
   const current = index >= 0 ? tracks[index] : null;
-  // cambia quando il file viene sovrascritto (taglio) → ricarica il nuovo contenuto
-  const currentSrc = current ? streamUrl(current.id, false, current.modifiedTime) : null;
 
-  const loadedIdRef = useRef<string | null>(null);
-  useEffect(() => {
+  // Ref per i gestori di eventi media / Media Session (non devono vedere stato vecchio)
+  const tracksRef = useRef(tracks);
+  tracksRef.current = tracks;
+  const currentIdRef = useRef<string | null>(null);
+  const fixingDurRef = useRef(false); // sto ricavando la durata di un webm che non la dichiara
+  const wantPlayRef = useRef(false);
+
+  /** Carica una traccia. play() è chiamato subito, nello stesso evento: su iOS serve perché
+   *  il passaggio al pezzo successivo funzioni anche a schermo bloccato / in auto. */
+  function load(t: AudioFile, autoplay: boolean) {
     const a = audioRef.current;
-    if (!a || !currentSrc || !current) return;
-    // nuova traccia → parte subito; stessa traccia con nuova versione (taglio) → riparte solo se suonava
-    const autoplay = loadedIdRef.current !== current.id || !a.paused;
-    loadedIdRef.current = current.id;
-    a.src = currentSrc;
-    a.load();
-    setTime(0); setDur(0);
-    if (autoplay) a.play().then(() => setPlaying(true)).catch(() => setPlaying(false));
-    else setPlaying(false);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentSrc]);
-
+    if (!a) return;
+    currentIdRef.current = t.id;
+    setCurrentId(t.id);
+    fixingDurRef.current = false;
+    wantPlayRef.current = autoplay;
+    a.src = streamUrl(t.id, false, t.modifiedTime);
+    setTime(0);
+    setDur(0);
+    if (autoplay) a.play().catch(() => setPlaying(false));
+  }
   function setIndex(i: number) {
-    const t = tracks[i];
-    if (t) setCurrentId(t.id);
+    const t = tracksRef.current[i];
+    if (t) load(t, true);
+  }
+  function step(dir: 1 | -1) {
+    const list = tracksRef.current;
+    const i = list.findIndex((t) => t.id === currentIdRef.current);
+    const t = list[i + dir];
+    if (t) load(t, true);
+    return Boolean(t);
+  }
+  function seekBy(sec: number) {
+    const a = audioRef.current;
+    if (!a || !isFinite(a.duration)) return;
+    a.currentTime = Math.max(0, Math.min(a.duration - 0.1, a.currentTime + sec));
   }
   function selectTrack(i: number) {
     if (i === index) togglePlay();
@@ -79,17 +107,118 @@ export default function AudioPlayer({
   function togglePlay() {
     const a = audioRef.current;
     if (!a) return;
-    if (a.paused) a.play().then(() => setPlaying(true)).catch(() => {});
-    else a.pause();
+    if (!currentIdRef.current) return setIndex(0);
+    if (a.paused) {
+      wantPlayRef.current = true;
+      a.play().catch(() => {});
+    } else {
+      wantPlayRef.current = false;
+      a.pause();
+    }
   }
   function onEnded() {
-    if (index < tracks.length - 1) setIndex(index + 1);
-    else setPlaying(false);
+    if (fixingDurRef.current) return;
+    if (!step(1)) {
+      wantPlayRef.current = false;
+      setPlaying(false);
+    }
   }
   function onError() {
     if (current) setFailed((s) => new Set(s).add(current.id));
     setPlaying(false);
   }
+
+  /* ─── Durata: i webm registrati dal browser non la dichiarano (durata "infinita") ─── */
+  function onLoadedMetadata(e: React.SyntheticEvent<HTMLAudioElement>) {
+    const a = e.currentTarget;
+    if (isFinite(a.duration)) {
+      setDur(a.duration);
+      syncPosition();
+      return;
+    }
+    // trucco standard: salta oltre la fine, il browser calcola la durata reale, poi torna a 0
+    fixingDurRef.current = true;
+    a.currentTime = 1e101;
+  }
+  function onDurationChange(e: React.SyntheticEvent<HTMLAudioElement>) {
+    const a = e.currentTarget;
+    if (!isFinite(a.duration) || a.duration <= 0) return;
+    setDur(a.duration);
+    if (fixingDurRef.current) {
+      fixingDurRef.current = false;
+      a.currentTime = 0;
+      if (wantPlayRef.current && a.paused) a.play().catch(() => {});
+    }
+    syncPosition();
+  }
+
+  /* ─── Integrazione con auto / CarPlay / Bluetooth / schermata di blocco (Media Session) ─── */
+  function syncPosition() {
+    const a = audioRef.current;
+    if (!a || !("mediaSession" in navigator) || !isFinite(a.duration) || a.duration <= 0) return;
+    try {
+      navigator.mediaSession.setPositionState({
+        duration: a.duration,
+        position: Math.min(a.currentTime, a.duration),
+        playbackRate: a.playbackRate || 1,
+      });
+    } catch {
+      /* ignora */
+    }
+  }
+
+  useEffect(() => {
+    if (!("mediaSession" in navigator)) return;
+    const ms = navigator.mediaSession;
+    const set = (action: MediaSessionAction, h: MediaSessionActionHandler | null) => {
+      try {
+        ms.setActionHandler(action, h);
+      } catch {
+        /* azione non supportata */
+      }
+    };
+    set("play", () => togglePlayRef.current(true));
+    set("pause", () => togglePlayRef.current(false));
+    // Volutamente NIENTE seekbackward/seekforward: su iPhone/CarPlay sostituirebbero
+    // i tasti "brano precedente/successivo" con ±15 s. In auto è più utile saltare tra i pezzi.
+    set("previoustrack", () => {
+      const a = audioRef.current;
+      if (a && a.currentTime > 3) a.currentTime = 0;
+      else step(-1);
+    });
+    set("nexttrack", () => step(1));
+    set("seekto", (d) => {
+      const a = audioRef.current;
+      if (a && d.seekTime != null && isFinite(a.duration)) a.currentTime = d.seekTime;
+    });
+    return () => {
+      for (const a of ["play", "pause", "previoustrack", "nexttrack", "seekto"] as MediaSessionAction[]) set(a, null);
+      ms.metadata = null;
+      ms.playbackState = "none";
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const togglePlayRef = useRef((play: boolean) => {
+    const a = audioRef.current;
+    if (!a) return;
+    wantPlayRef.current = play;
+    if (play) a.play().catch(() => {});
+    else a.pause();
+  });
+
+  useEffect(() => {
+    if (!("mediaSession" in navigator) || !current || typeof MediaMetadata === "undefined") return;
+    navigator.mediaSession.metadata = new MediaMetadata({
+      title: songTitle(current.name),
+      artist: "Animali Fantastici del Sud America",
+      album: `Prova · ${prettyFolderDate(folderName)}`,
+      artwork: [
+        { src: "/icons/icon-192.png", sizes: "192x192", type: "image/png" },
+        { src: "/icons/icon-512.png", sizes: "512x512", type: "image/png" },
+      ],
+    });
+  }, [current?.id, current?.name, folderName]); // eslint-disable-line react-hooks/exhaustive-deps
 
   /* ─── Delete ─── */
   async function doDelete(id: string) {
@@ -98,7 +227,9 @@ export default function AudioPlayer({
     try {
       await deleteDriveFile(id);
       setTracks((prev) => prev.filter((t) => t.id !== id));
-      if (currentId === id) {
+      if (currentIdRef.current === id) {
+        currentIdRef.current = null;
+        wantPlayRef.current = false;
         const a = audioRef.current;
         if (a) { a.pause(); a.removeAttribute("src"); a.load(); }
         setPlaying(false);
@@ -148,12 +279,22 @@ export default function AudioPlayer({
       <audio
         ref={audioRef}
         loop={loop}
-        onTimeUpdate={(e) => setTime(e.currentTarget.currentTime)}
-        onLoadedMetadata={(e) => setDur(e.currentTarget.duration)}
+        onTimeUpdate={(e) => !fixingDurRef.current && setTime(e.currentTarget.currentTime)}
+        onLoadedMetadata={onLoadedMetadata}
+        onDurationChange={onDurationChange}
+        onSeeked={syncPosition}
         onEnded={onEnded}
         onError={onError}
-        onPause={() => setPlaying(false)}
-        onPlay={() => setPlaying(true)}
+        onPause={() => {
+          if (fixingDurRef.current) return;
+          setPlaying(false);
+          if ("mediaSession" in navigator) navigator.mediaSession.playbackState = "paused";
+        }}
+        onPlay={() => {
+          setPlaying(true);
+          if ("mediaSession" in navigator) navigator.mediaSession.playbackState = "playing";
+          syncPosition();
+        }}
         preload="none"
         hidden
       />
@@ -179,9 +320,11 @@ export default function AudioPlayer({
                 </button>
 
                 <button type="button" onClick={() => selectTrack(i)} className="min-w-0 flex-1 text-left">
-                  <p className="truncate text-sm font-medium">{`${i + 1}. ${prettyName(t.name)}`}</p>
+                  <p className="truncate text-sm font-medium">{`${i + 1}. ${songTitle(t.name)}`}</p>
                   <p className="text-xs text-sand/50">
-                    {active && dur ? `${mmss(time)} / ${mmss(dur)}` : formatBytes(t.size)}
+                    {active && dur > 0
+                      ? `${mmss(time)} / ${mmss(dur)}`
+                      : [recordedAt(t.name), formatBytes(t.size)].filter(Boolean).join(" · ")}
                     {bad && <span className="text-coral"> · non riproducibile, scarica ▾</span>}
                   </p>
                 </button>
@@ -211,19 +354,6 @@ export default function AudioPlayer({
                   <TrashGlyph />
                 </button>
               </div>
-
-              {/* Slider playback */}
-              {active && (
-                <input
-                  type="range" min={0} max={dur || 0} step={0.1} value={time}
-                  onChange={(e) => {
-                    const a = audioRef.current; if (!a) return;
-                    const v = Number(e.target.value); a.currentTime = v; setTime(v);
-                  }}
-                  className="mt-1.5 w-full accent-flamingo"
-                  aria-label="Avanzamento"
-                />
-              )}
 
               {actionError?.id === t.id && (
                 <p className="mt-1 px-1 text-xs text-coral">{actionError.msg}</p>
@@ -301,6 +431,8 @@ export default function AudioPlayer({
           onClose={() => setTrimTrack(null)}
           onOverwrite={(updated) => {
             setTracks((prev) => prev.map((t) => (t.id === updated.id ? updated : t)));
+            const a = audioRef.current;
+            if (a && currentIdRef.current === updated.id) load(updated, !a.paused);
           }}
           onSavedNew={(added) => {
             setTracks((prev) => [...prev, added].sort((a, b) => a.name.localeCompare(b.name)));
@@ -310,49 +442,88 @@ export default function AudioPlayer({
 
       {/* Player bar fisso */}
       {current && (
-        <div className="card sticky bottom-[calc(4rem+env(safe-area-inset-bottom))] z-10 flex items-center justify-between p-3">
-          <button
-            type="button"
-            onClick={() => setLoop((v) => !v)}
-            aria-pressed={loop}
-            aria-label={loop ? "Ripeti traccia: attivo" : "Ripeti traccia"}
-            className={`flex h-9 w-9 items-center justify-center rounded-full transition ${
-              loop ? "bg-sky/20 text-sky ring-1 ring-sky/40" : "text-sand/40 hover:text-sand/70"
-            }`}
-          >
-            <LoopGlyph />
-          </button>
-
-          <div className="flex items-center gap-8">
+        <div className="card sticky bottom-[calc(4rem+env(safe-area-inset-bottom))] z-10 flex flex-col gap-1 bg-dark-card/95 p-3 shadow-2xl backdrop-blur">
+          <div className="flex items-baseline justify-between gap-3 px-1">
+            <p className="min-w-0 truncate text-sm font-semibold">{songTitle(current.name)}</p>
+            <p className="shrink-0 font-mono text-xs tabular-nums text-sand/50">
+              {mmss(time)} / {dur > 0 ? mmss(dur) : "–:––"}
+            </p>
+          </div>
+          <input
+            type="range"
+            min={0}
+            max={dur || 1}
+            step={0.1}
+            value={Math.min(time, dur || 0)}
+            disabled={!(dur > 0)}
+            onChange={(e) => {
+              const a = audioRef.current;
+              if (!a) return;
+              const v = Number(e.target.value);
+              a.currentTime = v;
+              setTime(v);
+            }}
+            className="w-full accent-flamingo disabled:opacity-40"
+            aria-label="Avanzamento"
+          />
+          <div className="flex items-center justify-between">
             <button
               type="button"
-              onClick={() => index > 0 && setIndex(index - 1)}
+              onClick={() => setLoop((v) => !v)}
+              aria-pressed={loop}
+              aria-label={loop ? "Ripeti traccia: attivo" : "Ripeti traccia"}
+              className={`flex h-10 w-10 items-center justify-center rounded-full transition ${
+                loop ? "bg-sky/20 text-sky ring-1 ring-sky/40" : "text-sand/40 hover:text-sand/70"
+              }`}
+            >
+              <LoopGlyph />
+            </button>
+            <button
+              type="button"
+              onClick={() => step(-1)}
               disabled={index <= 0}
-              className="text-sand transition disabled:opacity-30"
-              aria-label="Precedente"
+              className="flex h-10 w-10 items-center justify-center text-sand transition disabled:opacity-30"
+              aria-label="Pezzo precedente"
             >
               <PrevGlyph />
             </button>
             <button
               type="button"
+              onClick={() => seekBy(-15)}
+              disabled={!(dur > 0)}
+              className="flex h-10 w-10 items-center justify-center text-sand/80 transition disabled:opacity-30"
+              aria-label="Indietro 15 secondi"
+            >
+              <SkipGlyph back />
+            </button>
+            <button
+              type="button"
               onClick={togglePlay}
-              className="flex h-12 w-12 items-center justify-center rounded-full bg-gradient-to-br from-flamingo to-tangerine text-white shadow-lg"
-              aria-label="Play/Pausa"
+              className="flex h-14 w-14 items-center justify-center rounded-full bg-gradient-to-br from-flamingo to-tangerine text-white shadow-lg transition active:scale-95"
+              aria-label={playing ? "Pausa" : "Riproduci"}
             >
               {playing ? <PauseGlyph big /> : <PlayGlyph big />}
             </button>
             <button
               type="button"
-              onClick={() => index < tracks.length - 1 && setIndex(index + 1)}
+              onClick={() => seekBy(15)}
+              disabled={!(dur > 0)}
+              className="flex h-10 w-10 items-center justify-center text-sand/80 transition disabled:opacity-30"
+              aria-label="Avanti 15 secondi"
+            >
+              <SkipGlyph />
+            </button>
+            <button
+              type="button"
+              onClick={() => step(1)}
               disabled={index >= tracks.length - 1}
-              className="text-sand transition disabled:opacity-30"
-              aria-label="Successivo"
+              className="flex h-10 w-10 items-center justify-center text-sand transition disabled:opacity-30"
+              aria-label="Pezzo successivo"
             >
               <NextGlyph />
             </button>
+            <span className="w-10" aria-hidden />
           </div>
-
-          <div className="w-9" aria-hidden />
         </div>
       )}
     </div>
@@ -402,6 +573,15 @@ function ScissorsIcon() {
     <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
       <circle cx="6" cy="6" r="3" /><circle cx="6" cy="18" r="3" />
       <line x1="20" y1="4" x2="8.12" y2="15.88" /><line x1="14.47" y1="14.48" x2="20" y2="20" /><line x1="8.12" y1="8.12" x2="12" y2="12" />
+    </svg>
+  );
+}
+function SkipGlyph({ back }: { back?: boolean }) {
+  return (
+    <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" style={back ? undefined : { transform: "scaleX(-1)" }}>
+      <path d="M3 12a9 9 0 1 0 3-6.7" />
+      <path d="M3 4v5h5" />
+      <text x="12" y="15.5" textAnchor="middle" fontSize="7.5" fontWeight="700" fill="currentColor" stroke="none" style={back ? undefined : { transform: "scaleX(-1)", transformOrigin: "12px 12px" }}>15</text>
     </svg>
   );
 }

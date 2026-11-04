@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import fixWebmDuration from "fix-webm-duration";
 import { setRecording as setGlobalRecording } from "@/lib/queue";
 
 type Mode = "audio" | "video" | "foto";
@@ -300,8 +301,18 @@ export default function Recorder({ onRecorded }: { onRecorded: (blob: Blob) => v
         if (mode === "audio") stopStream();
         setRecording(false);
         setElapsed(0);
-        if (blob.size > 0) onRecorded(blob);
+        if (blob.size === 0) return;
+        // I webm del MediaRecorder non contengono la durata: i player la vedono "infinita"
+        // (niente barra di avanzamento, niente durata in auto/schermata di blocco). La scriviamo noi.
+        if (type.includes("webm")) {
+          fixWebmDuration(blob, performance.now() - startedAt, { logger: false })
+            .then((fixed) => onRecorded(fixed.size ? new Blob([fixed], { type }) : blob))
+            .catch(() => onRecorded(blob));
+        } else {
+          onRecorded(blob);
+        }
       };
+      const startedAt = performance.now();
       rec.start();
       acquireWakeLock();
       recRef.current = rec;
