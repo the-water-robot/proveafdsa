@@ -56,6 +56,9 @@ export default function Recorder({ onRecorded }: { onRecorded: (blob: Blob) => v
   const recRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
   const streamRef = useRef<MediaStream | null>(null);
+  // copia reattiva dello stream (per l'indicatore di livello)
+  const [liveStream, setLiveStream] = useState<MediaStream | null>(null);
+  const [checkingLevel, setCheckingLevel] = useState(false);
   const previewRef = useRef<HTMLVideoElement | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const touchX = useRef<number | null>(null);
@@ -168,15 +171,37 @@ export default function Recorder({ onRecorded }: { onRecorded: (blob: Blob) => v
   function stopStream() {
     streamRef.current?.getTracks().forEach((t) => t.stop());
     streamRef.current = null;
+    setLiveStream(null);
     setCameraReady(false);
   }
 
-  async function openCamera(facing: "environment" | "user" = "environment") {
+  /** Apre solo il microfono (senza registrare) per posizionare il telefono guardando il livello. */
+  async function toggleLevelCheck() {
+    setError(null);
     if (streamRef.current) {
+      stopStream();
+      return;
+    }
+    setCheckingLevel(true);
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: MUSIC_AUDIO });
+      streamRef.current = stream;
+      setLiveStream(stream);
+    } catch {
+      setError("Microfono non disponibile o permesso negato.");
+    } finally {
+      setCheckingLevel(false);
+    }
+  }
+
+  async function openCamera(facing: "environment" | "user" = "environment") {
+    if (streamRef.current?.getVideoTracks().length) {
       attachPreview(streamRef.current);
       setCameraReady(true);
       return;
     }
+    // stream solo-audio (controllo livello) → chiudilo e apri camera+microfono
+    if (streamRef.current) stopStream();
     setCameraReady(false);
     setError(null);
     try {
@@ -185,6 +210,7 @@ export default function Recorder({ onRecorded }: { onRecorded: (blob: Blob) => v
         audio: MUSIC_AUDIO,
       });
       streamRef.current = stream;
+      setLiveStream(stream);
       attachPreview(stream);
       setCameraReady(true);
     } catch {
@@ -251,6 +277,7 @@ export default function Recorder({ onRecorded }: { onRecorded: (blob: Blob) => v
           mode === "video" ? { audio: MUSIC_AUDIO, video: { facingMode } } : { audio: MUSIC_AUDIO },
         );
         streamRef.current = stream;
+        setLiveStream(stream);
         if (mode === "video") attachPreview(stream);
       }
 
@@ -500,6 +527,9 @@ export default function Recorder({ onRecorded }: { onRecorded: (blob: Blob) => v
         {/* Pulsante di registrazione / scatto (normale, non fullscreen) */}
         {!fullscreen && captureBtn}
 
+        {/* Indicatore di livello del microfono */}
+        {!fullscreen && mode !== "foto" && liveStream && <LevelMeter stream={liveStream} />}
+
         {/* Testo stato */}
         {!fullscreen && (
           <div className="text-center">
@@ -511,9 +541,21 @@ export default function Recorder({ onRecorded }: { onRecorded: (blob: Blob) => v
                 <p className="text-xs text-sand/50">Tocca di nuovo per fermare</p>
               </>
             ) : (
-              <p className="text-sm font-medium text-sand/80">
-                {mode === "foto" ? "Tocca per scattare" : "Tocca per registrare"}
-              </p>
+              <>
+                <p className="text-sm font-medium text-sand/80">
+                  {mode === "foto" ? "Tocca per scattare" : "Tocca per registrare"}
+                </p>
+                {mode === "audio" && (
+                  <button
+                    type="button"
+                    onClick={toggleLevelCheck}
+                    disabled={checkingLevel}
+                    className="mt-1.5 text-xs font-medium text-sky underline-offset-4 hover:underline disabled:opacity-50"
+                  >
+                    {liveStream ? "Chiudi microfono" : "Controlla livello prima di registrare"}
+                  </button>
+                )}
+              </>
             )}
           </div>
         )}
@@ -564,6 +606,87 @@ export default function Recorder({ onRecorded }: { onRecorded: (blob: Blob) => v
         )}
       </div>
     </>
+  );
+}
+
+/* ─── Indicatore di livello ─── */
+
+// Scala in dB: -60 dB → 0%, 0 dB (fondo scala) → 100%
+const DB_FLOOR = -60;
+const pct = (db: number) => Math.max(0, Math.min(1, (db - DB_FLOOR) / -DB_FLOOR)) * 100;
+
+function LevelMeter({ stream }: { stream: MediaStream }) {
+  const maskRef = useRef<HTMLDivElement>(null);
+  const [clip, setClip] = useState(false);
+
+  useEffect(() => {
+    if (!stream.getAudioTracks().length) return;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const Ctx: typeof AudioContext = window.AudioContext || (window as any).webkitAudioContext;
+    if (!Ctx) return;
+    const ctx = new Ctx();
+    const src = ctx.createMediaStreamSource(stream);
+    const an = ctx.createAnalyser();
+    an.fftSize = 2048;
+    src.connect(an); // niente collegamento alle casse: solo analisi
+    const buf = new Float32Array(an.fftSize);
+    let raf = 0;
+    let level = 0;
+    let clipUntil = 0;
+    let clipShown = false;
+
+    // iOS può creare il contesto "sospeso": riprendilo al primo tocco
+    const resume = () => ctx.state === "suspended" && ctx.resume().catch(() => {});
+    resume();
+    document.addEventListener("pointerdown", resume);
+
+    const tick = () => {
+      an.getFloatTimeDomainData(buf);
+      let peak = 0;
+      for (let i = 0; i < buf.length; i++) {
+        const v = Math.abs(buf[i]);
+        if (v > peak) peak = v;
+      }
+      const target = pct(20 * Math.log10(Math.max(peak, 1e-6)));
+      // salita immediata, discesa morbida (come un VU meter)
+      level = target > level ? target : level * 0.93 + target * 0.07;
+      if (maskRef.current) maskRef.current.style.width = `${100 - level}%`;
+      const now = performance.now();
+      if (peak >= 0.99) clipUntil = now + 1500;
+      const c = now < clipUntil;
+      if (c !== clipShown) {
+        clipShown = c;
+        setClip(c);
+      }
+      raf = requestAnimationFrame(tick);
+    };
+    tick();
+
+    return () => {
+      cancelAnimationFrame(raf);
+      document.removeEventListener("pointerdown", resume);
+      src.disconnect();
+      ctx.close().catch(() => {});
+    };
+  }, [stream]);
+
+  return (
+    <div className="w-full max-w-[260px]">
+      <div
+        className="relative h-2.5 w-full overflow-hidden rounded-full"
+        style={{
+          background: `linear-gradient(to right, #7ED93A 0%, #7ED93A ${pct(-18)}%, #FFD000 ${pct(-18)}%, #FFD000 ${pct(-3)}%, #FF4757 ${pct(-3)}%)`,
+        }}
+        role="meter"
+        aria-label="Livello microfono"
+      >
+        {/* maschera scura che copre la parte non raggiunta dal segnale */}
+        <div ref={maskRef} className="absolute inset-y-0 right-0 bg-dark-bg/90" style={{ width: "100%" }} />
+      </div>
+      <p className={`mt-1 text-center text-[11px] ${clip ? "font-semibold text-coral" : "text-sand/40"}`}>
+        {clip ? "Satura! Allontana il telefono dalle casse" : "Ideale: picchi nel giallo, mai nel rosso"}
+      </p>
+    </div>
   );
 }
 
