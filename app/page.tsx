@@ -1,51 +1,42 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import Link from "next/link";
 import Recorder from "@/components/Recorder";
-import { uploadOne } from "@/lib/upload";
+import { MEMBERS } from "@/lib/band";
+import { extFromMime, formatBytes, prettyFolderDate, splitNameExt, todayIso } from "@/lib/format";
 import {
-  buildFileName,
-  extFromMime,
-  splitNameExt,
-  timeLabel,
-  todayIso,
-} from "@/lib/format";
-
-type Status = "ready" | "uploading" | "done" | "error";
-
-interface QueueItem {
-  id: string;
-  file: Blob;
-  base: string; // nome senza estensione ("prova" per le registrazioni)
-  ext: string;
-  time: string; // "HH.mm.ss" del momento di acquisizione
-  size: number;
-  status: Status;
-  progress: number; // 0..1
-  subfolder?: string; // "video" | "foto" | undefined (audio → cartella radice)
-  error?: string;
-  link?: string;
-}
+  addBlob,
+  dismissRestored,
+  getServerSnapshot,
+  getSnapshot,
+  nameFor,
+  removeItem,
+  restoreQueue,
+  setDate,
+  setLabel,
+  subscribe,
+  uploadAll,
+  type Status,
+} from "@/lib/queue";
 
 const SHARE_CACHE = "afdsa-shared";
+const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
 export default function Home() {
-  const [date, setDate] = useState(todayIso());
+  const { items, uploading, recording, date, label, lastFolder, restoredCount } = useSyncExternalStore(
+    subscribe,
+    getSnapshot,
+    getServerSnapshot,
+  );
   const [who, setWho] = useState("");
-  const [label, setLabel] = useState("");
-  const [items, setItems] = useState<QueueItem[]>([]);
-  const [uploading, setUploading] = useState(false);
-  const [folderLink, setFolderLink] = useState<string | null>(null);
-  const [doneFolder, setDoneFolder] = useState<{ id: string; name: string } | null>(null);
-
   const [pinProtected, setPinProtected] = useState(false);
   const [pin, setPin] = useState("");
   const [configMissing, setConfigMissing] = useState<string[] | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Carica preferenze locali + stato del server + eventuali file condivisi (share target)
+  // Carica preferenze locali + stato del server + coda salvata + eventuali file condivisi (share target)
   useEffect(() => {
     setWho(localStorage.getItem("afdsa-who") || "");
     setPin(localStorage.getItem("afdsa-pin") || "");
@@ -58,56 +49,46 @@ export default function Home() {
       })
       .catch(() => {});
 
+    restoreQueue();
     importSharedFiles();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  useEffect(() => {
-    localStorage.setItem("afdsa-who", who);
-  }, [who]);
-  useEffect(() => {
-    localStorage.setItem("afdsa-pin", pin);
-  }, [pin]);
+  function changeWho(v: string) {
+    setWho(v);
+    localStorage.setItem("afdsa-who", v);
+  }
+  function changePin(v: string) {
+    setPin(v);
+    localStorage.setItem("afdsa-pin", v);
+  }
 
-  const addBlob = useCallback((file: Blob, base: string, ext: string) => {
-    const type = file.type || "";
-    const subfolder = type.startsWith("video/") ? "video" : type.startsWith("image/") ? "foto" : undefined;
-    setItems((prev) => [
-      ...prev,
-      {
-        id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-        file,
-        base,
-        ext,
-        time: timeLabel(),
-        size: file.size,
-        status: "ready",
-        progress: 0,
-        subfolder,
-      },
-    ]);
-    setFolderLink(null);
-    setDoneFolder(null);
+  const pendingCount = items.filter((i) => i.status === "ready" || i.status === "error").length;
+  const allDone = items.length > 0 && items.every((i) => i.status === "done");
+
+  // Avviso prima di chiudere/ricaricare mentre si registra o si carica
+  useEffect(() => {
+    if (!recording && !uploading) return;
+    const h = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = "";
+    };
+    window.addEventListener("beforeunload", h);
+    return () => window.removeEventListener("beforeunload", h);
+  }, [recording, uploading]);
+
+  const onRecorded = useCallback((blob: Blob) => {
+    const type = blob.type || "";
+    const base = type.startsWith("video/") ? "video" : type.startsWith("image/") ? "foto" : "prova";
+    addBlob(blob, base, extFromMime(type || "audio/webm"));
   }, []);
 
-  const onRecorded = useCallback(
-    (blob: Blob) => {
-      const type = blob.type || "";
-      const base = type.startsWith("video/") ? "video" : type.startsWith("image/") ? "foto" : "prova";
-      addBlob(blob, base, extFromMime(type || "audio/webm"));
-    },
-    [addBlob],
-  );
-
-  const addFiles = useCallback(
-    (files: FileList | File[]) => {
-      Array.from(files).forEach((f) => {
-        const { base, ext } = splitNameExt(f.name);
-        addBlob(f, base || "file", ext || extFromMime(f.type));
-      });
-    },
-    [addBlob],
-  );
+  const addFiles = useCallback((files: FileList | File[]) => {
+    Array.from(files).forEach((f) => {
+      const { base, ext } = splitNameExt(f.name);
+      addBlob(f, base || "file", ext || extFromMime(f.type));
+    });
+  }, []);
 
   async function importSharedFiles() {
     try {
@@ -131,55 +112,8 @@ export default function Home() {
     }
   }
 
-  function nameFor(item: QueueItem): string {
-    return buildFileName({ time: item.time, who, label, base: item.base, ext: item.ext });
-  }
-
-  function removeItem(id: string) {
-    setItems((prev) => prev.filter((i) => i.id !== id));
-  }
-
-  function patch(id: string, p: Partial<QueueItem>) {
-    setItems((prev) => prev.map((i) => (i.id === id ? { ...i, ...p } : i)));
-  }
-
-  async function uploadAll() {
-    if (uploading) return;
-    setUploading(true);
-    // Sequenziale: il primo upload crea la cartella della data, gli altri la riusano.
-    const pending = items.filter((i) => i.status === "ready" || i.status === "error");
-    for (const item of pending) {
-      patch(item.id, { status: "uploading", progress: 0, error: undefined });
-      try {
-        const session = await uploadOne(
-          { rehearsalDate: date, fileName: nameFor(item), file: item.file, subfolder: item.subfolder, pin },
-          (frac) => patch(item.id, { progress: frac }),
-        );
-        patch(item.id, { status: "done", progress: 1, link: session.folderWebViewLink });
-        setFolderLink(session.folderWebViewLink);
-        setDoneFolder({ id: session.folderId, name: session.folderName });
-      } catch (e) {
-        patch(item.id, {
-          status: "error",
-          error: e instanceof Error ? e.message : "Errore",
-        });
-      }
-    }
-    setUploading(false);
-  }
-
-  const pendingCount = items.filter((i) => i.status === "ready" || i.status === "error").length;
-  const allDone = items.length > 0 && items.every((i) => i.status === "done");
-
-  // Dopo 2 secondi che tutto è caricato: azzera etichetta e rimuovi i file dalla lista
-  useEffect(() => {
-    if (!allDone) return;
-    const t = setTimeout(() => {
-      setLabel("");
-      setItems((prev) => prev.filter((i) => i.status !== "done"));
-    }, 2000);
-    return () => clearTimeout(t);
-  }, [allDone]);
+  const isToday = date === todayIso();
+  const folderName = date.replace(/-/g, " ");
 
   return (
     <main className="mx-auto flex min-h-[100dvh] max-w-md flex-col gap-5 px-4 pb-[calc(9rem+env(safe-area-inset-bottom))] pt-6">
@@ -189,7 +123,7 @@ export default function Home() {
           <h1 className="font-display text-2xl font-bold leading-tight">Prove</h1>
           <p className="text-sm text-sand/60">Animali Fantastici del Sud America</p>
         </div>
-        <span className="text-xs text-sand/30 font-mono">v9</span>
+        <span className="text-xs text-sand/30 font-mono">v10</span>
       </header>
 
       {configMissing && configMissing.length > 0 && (
@@ -198,6 +132,20 @@ export default function Home() {
           <p className="mt-1 text-sand/70">
             Mancano le variabili: {configMissing.join(", ")}. Imposta le env su Vercel (vedi README).
           </p>
+        </div>
+      )}
+
+      {restoredCount > 0 && (
+        <div className="card flex items-start gap-3 border-solar/40 bg-solar/10 p-4 text-sm">
+          <p className="flex-1 text-sand/80">
+            <b className="text-solar">
+              {restoredCount === 1 ? "1 file recuperato" : `${restoredCount} file recuperati`}
+            </b>{" "}
+            dall&apos;ultima volta: non erano ancora stati caricati. Controlla la data e premi Carica.
+          </p>
+          <button type="button" onClick={dismissRestored} className="text-sand/40" aria-label="Chiudi avviso">
+            <CloseIcon />
+          </button>
         </div>
       )}
 
@@ -211,40 +159,52 @@ export default function Home() {
             id="date"
             type="date"
             value={date}
-            onChange={(e) => setDate(e.target.value)}
+            onChange={(e) => e.target.value && setDate(e.target.value)}
+            disabled={uploading}
             className="field"
           />
           <p className="mt-1 text-xs text-sand/50">
-            I file finiscono nella cartella <span className="font-mono">{date.replace(/-/g, " ")}</span> su Drive.
+            {date && (
+              <>
+                {!isToday && <span className="font-semibold text-solar">Non è oggi · </span>}
+                {prettyFolderDate(folderName)} → cartella <span className="font-mono">{folderName}</span>
+              </>
+            )}
           </p>
         </div>
-        <div className="grid grid-cols-2 gap-3">
-          <div>
-            <label className="label" htmlFor="who">
-              Chi sei <span className="text-sand/40">(opz.)</span>
-            </label>
-            <input
-              id="who"
-              type="text"
-              value={who}
-              onChange={(e) => setWho(e.target.value)}
-              placeholder="es. Luca"
-              className="field"
-            />
+        <div>
+          <p className="label">
+            Chi sei <span className="text-sand/40">(opz.)</span>
+          </p>
+          <div className="flex flex-wrap gap-2">
+            {MEMBERS.map((m) => {
+              const on = who.toLowerCase() === m;
+              return (
+                <button
+                  key={m}
+                  type="button"
+                  onClick={() => changeWho(on ? "" : m)}
+                  aria-pressed={on}
+                  className={`chip ${on ? "chip-on" : "chip-off"}`}
+                >
+                  {cap(m)}
+                </button>
+              );
+            })}
           </div>
-          <div>
-            <label className="label" htmlFor="label">
-              Etichetta <span className="text-sand/40">(opz.)</span>
-            </label>
-            <input
-              id="label"
-              type="text"
-              value={label}
-              onChange={(e) => setLabel(e.target.value)}
-              placeholder="es. soundcheck"
-              className="field"
-            />
-          </div>
+        </div>
+        <div>
+          <label className="label" htmlFor="label">
+            Etichetta <span className="text-sand/40">(opz.)</span>
+          </label>
+          <input
+            id="label"
+            type="text"
+            value={label}
+            onChange={(e) => setLabel(e.target.value)}
+            placeholder="es. soundcheck, nuovo pezzo…"
+            className="field"
+          />
         </div>
         {pinProtected && (
           <div>
@@ -256,7 +216,7 @@ export default function Home() {
               type="text"
               inputMode="numeric"
               value={pin}
-              onChange={(e) => setPin(e.target.value)}
+              onChange={(e) => changePin(e.target.value)}
               placeholder="codice della band"
               className="field"
             />
@@ -283,6 +243,7 @@ export default function Home() {
           ref={fileInputRef}
           type="file"
           multiple
+          accept="audio/*,video/*,image/*"
           hidden
           onChange={(e) => {
             if (e.target.files?.length) addFiles(e.target.files);
@@ -295,13 +256,13 @@ export default function Home() {
       {items.length > 0 && (
         <section className="flex flex-col gap-2">
           <h2 className="px-1 text-sm font-semibold text-sand/70">
-            Da caricare ({items.length})
+            {allDone ? "Caricati" : `Da caricare (${pendingCount})`}
           </h2>
           {items.map((item) => (
             <div key={item.id} className="card flex items-center gap-3 p-3">
               <StatusDot status={item.status} />
               <div className="min-w-0 flex-1">
-                <p className="truncate text-sm font-medium">{nameFor(item)}</p>
+                <p className="truncate text-sm font-medium">{nameFor(item, who, label)}</p>
                 <p className="text-xs text-sand/50">
                   {formatBytes(item.size)}
                   {item.status === "uploading" && ` · ${Math.round(item.progress * 100)}%`}
@@ -334,19 +295,17 @@ export default function Home() {
         </section>
       )}
 
-      {(doneFolder || folderLink) && (
+      {lastFolder && (
         <div className="flex flex-col items-center gap-2">
-          {doneFolder && (
-            <Link
-              href={`/prove/${doneFolder.id}?d=${encodeURIComponent(doneFolder.name)}`}
-              className="w-full rounded-xl border border-sky/40 bg-sky/10 px-4 py-3 text-center text-sm font-semibold text-sky transition active:scale-[0.99]"
-            >
-              ▸ Ascolta / info di questa prova
-            </Link>
-          )}
-          {folderLink && (
+          <Link
+            href={`/prove/${lastFolder.id}?d=${encodeURIComponent(lastFolder.name)}`}
+            className="w-full rounded-xl border border-sky/40 bg-sky/10 px-4 py-3 text-center text-sm font-semibold text-sky transition active:scale-[0.99]"
+          >
+            ▸ Ascolta / info di questa prova
+          </Link>
+          {lastFolder.link && (
             <a
-              href={folderLink}
+              href={lastFolder.link}
               target="_blank"
               rel="noopener noreferrer"
               className="text-sm font-medium text-sand/60 underline-offset-4 hover:underline"
@@ -363,13 +322,15 @@ export default function Home() {
           <div className="mx-auto max-w-md">
             <button
               type="button"
-              onClick={uploadAll}
-              disabled={uploading}
+              onClick={() => uploadAll({ who, pin })}
+              disabled={uploading || recording}
               className="w-full rounded-xl bg-gradient-to-r from-flamingo to-tangerine px-4 py-3.5 text-base font-semibold text-white shadow-lg transition active:scale-[0.99] disabled:opacity-60"
             >
               {uploading
                 ? "Caricamento in corso…"
-                : `Carica ${pendingCount} ${pendingCount === 1 ? "file" : "file"} su Drive`}
+                : recording
+                  ? "Ferma la registrazione per caricare"
+                  : `Carica ${pendingCount} file su Drive`}
             </button>
           </div>
         </div>
@@ -396,12 +357,6 @@ function StatusDot({ status }: { status: Status }) {
           ? "bg-sky animate-pulse"
           : "bg-sand/30";
   return <span className={`h-2.5 w-2.5 shrink-0 rounded-full ${cls}`} />;
-}
-
-function formatBytes(n: number): string {
-  if (n < 1024) return `${n} B`;
-  if (n < 1024 * 1024) return `${(n / 1024).toFixed(0)} KB`;
-  return `${(n / 1024 / 1024).toFixed(1)} MB`;
 }
 
 function PaperclipIcon() {

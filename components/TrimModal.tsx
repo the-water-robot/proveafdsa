@@ -1,10 +1,15 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import type { AudioFile } from "@/lib/library";
-import { streamUrl } from "@/lib/library";
-import { splitNameExt } from "@/lib/format";
-import { putResumable } from "@/lib/upload";
+import { storedPin, streamUrl } from "@/lib/library";
+import { formatBytes, isoFromFolderName, splitNameExt } from "@/lib/format";
+import { putResumable, uploadOne } from "@/lib/upload";
+
+// Oltre questa dimensione la decodifica completa in memoria (PCM float) può far crashare il telefono:
+// ~40 MB di opus/aac ≈ 1,5 h di audio ≈ 2 GB decodificati.
+const BIG_FILE = 40 * 1024 * 1024;
 
 function mmss(s: number): string {
   if (!isFinite(s) || s < 0) return "0:00";
@@ -55,12 +60,15 @@ function computePeaks(buffer: AudioBuffer, bins: number): Float32Array {
 
 interface Props {
   track: AudioFile;
+  folderName: string;
   onClose: () => void;
   onOverwrite: (updated: AudioFile) => void;
+  onSavedNew: (added: AudioFile) => void;
 }
 
-export default function TrimModal({ track, onClose, onOverwrite }: Props) {
+export default function TrimModal({ track, folderName, onClose, onOverwrite, onSavedNew }: Props) {
   const [buffer, setBuffer] = useState<AudioBuffer | null>(null);
+  const [confirmedBig, setConfirmedBig] = useState(track.size <= BIG_FILE);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   // Frazioni 0..1 rispetto alla durata totale
@@ -71,7 +79,21 @@ export default function TrimModal({ track, onClose, onOverwrite }: Props) {
   const [playing, setPlaying] = useState(false);
   const [saveState, setSaveState] = useState<"idle" | "busy" | "done" | "error">("idle");
   const [saveError, setSaveError] = useState<string | null>(null);
-  const [newFileSaved, setNewFileSaved] = useState(false);
+  const [doneMsg, setDoneMsg] = useState("Salvato ✓");
+  const [mounted, setMounted] = useState(false);
+
+  useEffect(() => {
+    setMounted(true);
+    // blocca lo scroll della pagina sotto il modale + chiudi con Esc
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", onKey);
+    return () => {
+      document.body.style.overflow = prev;
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [onClose]);
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const audioCtxRef = useRef<AudioContext | null>(null);
@@ -85,12 +107,14 @@ export default function TrimModal({ track, onClose, onOverwrite }: Props) {
 
   /* ─── Load ─── */
   useEffect(() => {
+    if (!confirmedBig) return;
     let cancelled = false;
     setLoading(true);
     setLoadError(null);
     (async () => {
       try {
-        const res = await fetch(streamUrl(track.id));
+        const res = await fetch(streamUrl(track.id, false, track.modifiedTime));
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const ab = await res.arrayBuffer();
         const ctx = new AudioContext();
         audioCtxRef.current = ctx;
@@ -101,10 +125,17 @@ export default function TrimModal({ track, onClose, onOverwrite }: Props) {
         startRef.current = 0; endRef.current = 1;
         setStartFrac(0); setEndFrac(1);
         // peaks calcolati subito per il canvas
-        const bins = Math.round((canvasRef.current?.offsetWidth ?? 320) * (window.devicePixelRatio || 1));
+        // canvas non ancora montato durante il caricamento → larghezza del pannello (max-w-md)
+        const w = Math.min(window.innerWidth, 448) - 32;
+        const bins = Math.round(w * (window.devicePixelRatio || 1));
         peaksRef.current = computePeaks(buf, bins);
-      } catch {
-        if (!cancelled) setLoadError("Formato audio non decodificabile.");
+      } catch (e) {
+        if (!cancelled)
+          setLoadError(
+            e instanceof Error && e.message.startsWith("HTTP")
+              ? `Impossibile scaricare l'audio (${e.message}).`
+              : "Formato audio non decodificabile.",
+          );
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -115,7 +146,7 @@ export default function TrimModal({ track, onClose, onOverwrite }: Props) {
       audioCtxRef.current?.close().catch(() => {});
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [track.id]);
+  }, [track.id, confirmedBig]);
 
   /* ─── Draw ─── */
   useEffect(() => { if (buffer) draw(null); }, [buffer, startFrac, endFrac]);
@@ -268,13 +299,20 @@ export default function TrimModal({ track, onClose, onOverwrite }: Props) {
       const r = await fetch(`/api/file-session?id=${track.id}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ mimeType: "audio/wav", newName, origin: window.location.origin }),
+        body: JSON.stringify({ mimeType: "audio/wav", newName, origin: window.location.origin, pin: storedPin() }),
       });
       if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || `Errore ${r.status}`);
       const { sessionUrl } = await r.json();
       await putResumable(sessionUrl, wav);
+      setDoneMsg("Sovrascritto ✓");
       setSaveState("done");
-      onOverwrite({ ...track, name: newName, size: wav.size, mimeType: "audio/wav" });
+      onOverwrite({
+        ...track,
+        name: newName,
+        size: wav.size,
+        mimeType: "audio/wav",
+        modifiedTime: new Date().toISOString(),
+      });
       setTimeout(onClose, 1400);
     } catch (e) {
       setSaveError(e instanceof Error ? e.message : "Errore");
@@ -282,17 +320,41 @@ export default function TrimModal({ track, onClose, onOverwrite }: Props) {
     }
   }
 
-  /* ─── Save: Nuovo file (download) ─── */
-  function doSaveNew() {
+  /* ─── Save: Nuovo file (caricato nella stessa prova, l'originale resta) ─── */
+  async function doSaveNew() {
     const buf = bufferRef.current;
     if (!buf) return;
     const wav = encodeWAV(buf, startRef.current * buf.duration, endRef.current * buf.duration);
     const { base } = splitNameExt(track.name);
-    const url = URL.createObjectURL(wav);
-    const a = document.createElement("a");
-    a.href = url; a.download = `${base}-trim.wav`; a.click();
-    setTimeout(() => URL.revokeObjectURL(url), 5000);
-    setNewFileSaved(true);
+    const fileName = `${base} — taglio.wav`;
+    const iso = isoFromFolderName(folderName);
+    if (!iso) {
+      // cartella senza data riconoscibile: ripiego sul download locale
+      const url = URL.createObjectURL(wav);
+      const a = document.createElement("a");
+      a.href = url; a.download = fileName; a.click();
+      setTimeout(() => URL.revokeObjectURL(url), 5000);
+      return;
+    }
+    setSaveState("busy"); setSaveError(null);
+    try {
+      const { file } = await uploadOne({ rehearsalDate: iso, fileName, file: wav, pin: storedPin() });
+      if (file.id) {
+        onSavedNew({
+          id: file.id,
+          name: file.name || fileName,
+          mimeType: "audio/wav",
+          size: wav.size,
+          modifiedTime: new Date().toISOString(),
+        });
+      }
+      setDoneMsg("Nuovo file salvato nella prova ✓");
+      setSaveState("done");
+      setTimeout(onClose, 1400);
+    } catch (e) {
+      setSaveError(e instanceof Error ? e.message : "Errore");
+      setSaveState("error");
+    }
   }
 
   const dur = buffer?.duration ?? 0;
@@ -300,12 +362,17 @@ export default function TrimModal({ track, onClose, onOverwrite }: Props) {
   const selEnd = endFrac * dur;
   const selDur = selEnd - selStart;
 
-  return (
+  if (!mounted) return null;
+
+  return createPortal(
     <div
-      className="fixed inset-0 z-50 flex items-end bg-black/70 backdrop-blur-sm"
-      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+      className="fixed inset-0 z-[100] flex items-end bg-black/70 backdrop-blur-sm"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Taglia audio"
+      onClick={(e) => { if (e.target === e.currentTarget && saveState !== "busy") onClose(); }}
     >
-      <div className="mx-auto w-full max-w-md rounded-t-2xl bg-[#1c1a18] shadow-2xl"
+      <div className="mx-auto w-full max-w-md rounded-t-3xl border-t border-dark-border bg-dark-card shadow-2xl"
         style={{ paddingBottom: "env(safe-area-inset-bottom)" }}>
 
         {/* Header */}
@@ -314,14 +381,28 @@ export default function TrimModal({ track, onClose, onOverwrite }: Props) {
             <p className="text-[10px] font-semibold uppercase tracking-widest text-sand/35">Taglia audio</p>
             <p className="truncate text-sm font-medium text-sand">{splitNameExt(track.name).base}</p>
           </div>
-          <button type="button" onClick={onClose} className="ml-3 shrink-0 rounded-full p-2 text-sand/50 hover:text-sand">
+          <button type="button" onClick={onClose} aria-label="Chiudi" className="ml-3 shrink-0 rounded-full p-2 text-sand/50 hover:text-sand">
             <XIcon />
           </button>
         </div>
 
         {/* Waveform */}
         <div className="px-4 pb-2">
-          {loading ? (
+          {!confirmedBig ? (
+            <div className="flex flex-col items-center gap-3 rounded-xl bg-dark-bg/60 px-4 py-5 text-center">
+              <p className="text-sm text-sand/80">
+                File grande ({formatBytes(track.size)}): il taglio avviene sul telefono e potrebbe
+                bloccarlo o richiedere parecchio tempo.
+              </p>
+              <button
+                type="button"
+                onClick={() => setConfirmedBig(true)}
+                className="rounded-lg border border-dark-border px-4 py-2 text-sm font-medium text-sand"
+              >
+                Prova comunque
+              </button>
+            </div>
+          ) : loading ? (
             <div className="flex h-[88px] items-center justify-center rounded-xl bg-dark-bg/60">
               <span className="h-5 w-5 animate-spin rounded-full border-2 border-sand/20 border-t-sand/60" />
               <span className="ml-3 text-xs text-sand/40">Carico audio…</span>
@@ -373,7 +454,7 @@ export default function TrimModal({ track, onClose, onOverwrite }: Props) {
         {buffer && (
           <div className="mt-5 flex flex-col gap-2.5 px-4 pb-4">
             {saveState === "done" ? (
-              <p className="py-2 text-center font-semibold text-lime">Salvato ✓</p>
+              <p className="py-2 text-center font-semibold text-lime">{doneMsg}</p>
             ) : saveState === "error" ? (
               <>
                 <p className="text-center text-sm text-coral">{saveError}</p>
@@ -385,34 +466,33 @@ export default function TrimModal({ track, onClose, onOverwrite }: Props) {
               <>
                 <button
                   type="button"
-                  onClick={doOverwrite}
+                  onClick={doSaveNew}
                   disabled={saveState === "busy"}
                   className="w-full rounded-xl bg-gradient-to-r from-flamingo to-tangerine py-3.5 text-sm font-semibold text-white shadow disabled:opacity-50"
                 >
-                  {saveState === "busy" ? "Salvo…" : "Sovrascrivi"}
+                  {saveState === "busy" ? "Salvo…" : "Salva come nuovo file"}
                 </button>
                 <button
                   type="button"
-                  onClick={doSaveNew}
+                  onClick={doOverwrite}
                   disabled={saveState === "busy"}
                   className="w-full rounded-xl border border-white/10 py-3 text-sm font-semibold text-sand/80 transition hover:bg-white/5 disabled:opacity-50"
                 >
-                  {newFileSaved ? "Scaricato ✓ — ricaricare per aggiungerlo" : "Salva come nuovo file"}
+                  Sovrascrivi l&apos;originale
                 </button>
-                {newFileSaved && (
-                  <p className="text-center text-[10px] text-sand/30">
-                    File .wav scaricato — aggiungilo via "Scegli file" nella schermata Carica.
-                  </p>
-                )}
+                <p className="text-center text-[11px] text-sand/35">
+                  Il taglio viene salvato in formato .wav (file più pesante dell&apos;originale).
+                </p>
               </>
             )}
-            <button type="button" onClick={onClose} className="mt-0.5 text-center text-sm text-sand/35">
+            <button type="button" onClick={onClose} disabled={saveState === "busy"} className="mt-0.5 text-center text-sm text-sand/35 disabled:opacity-40">
               Annulla
             </button>
           </div>
         )}
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
 

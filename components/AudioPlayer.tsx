@@ -2,8 +2,8 @@
 
 import { useEffect, useRef, useState } from "react";
 import type { AudioFile } from "@/lib/library";
-import { streamUrl } from "@/lib/library";
-import { splitNameExt } from "@/lib/format";
+import { deleteDriveFile, renameDriveFile, streamUrl } from "@/lib/library";
+import { formatBytes, splitNameExt } from "@/lib/format";
 import TrimModal from "@/components/TrimModal";
 
 function mmss(s: number): string {
@@ -15,18 +15,21 @@ function mmss(s: number): string {
 function prettyName(name: string): string {
   return splitNameExt(name).base || name;
 }
-function formatBytes(n: number): string {
-  if (!n) return "";
-  if (n < 1024 * 1024) return `${(n / 1024).toFixed(0)} KB`;
-  return `${(n / 1024 / 1024).toFixed(1)} MB`;
-}
 
 /* ─── Componente principale ─── */
 
-export default function AudioPlayer({ tracks: initial }: { tracks: AudioFile[] }) {
+export default function AudioPlayer({
+  tracks: initial,
+  folderName,
+}: {
+  tracks: AudioFile[];
+  folderName: string;
+}) {
   const [tracks, setTracks] = useState<AudioFile[]>(initial);
   const audioRef = useRef<HTMLAudioElement>(null);
-  const [index, setIndex] = useState(-1);
+  // Traccia corrente per id (non per indice: eliminando/aggiungendo file l'indice slitterebbe)
+  const [currentId, setCurrentId] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<{ id: string; msg: string } | null>(null);
   const [playing, setPlaying] = useState(false);
   const [time, setTime] = useState(0);
   const [dur, setDur] = useState(0);
@@ -45,18 +48,30 @@ export default function AudioPlayer({ tracks: initial }: { tracks: AudioFile[] }
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [deleteBusy, setDeleteBusy] = useState(false);
 
-  const current = index >= 0 && index < tracks.length ? tracks[index] : null;
+  const index = currentId ? tracks.findIndex((t) => t.id === currentId) : -1;
+  const current = index >= 0 ? tracks[index] : null;
+  // cambia quando il file viene sovrascritto (taglio) → ricarica il nuovo contenuto
+  const currentSrc = current ? streamUrl(current.id, false, current.modifiedTime) : null;
 
+  const loadedIdRef = useRef<string | null>(null);
   useEffect(() => {
     const a = audioRef.current;
-    if (!a || !current) return;
-    a.src = streamUrl(current.id);
+    if (!a || !currentSrc || !current) return;
+    // nuova traccia → parte subito; stessa traccia con nuova versione (taglio) → riparte solo se suonava
+    const autoplay = loadedIdRef.current !== current.id || !a.paused;
+    loadedIdRef.current = current.id;
+    a.src = currentSrc;
     a.load();
     setTime(0); setDur(0);
-    a.play().then(() => setPlaying(true)).catch(() => setPlaying(false));
+    if (autoplay) a.play().then(() => setPlaying(true)).catch(() => setPlaying(false));
+    else setPlaying(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [index]);
+  }, [currentSrc]);
 
+  function setIndex(i: number) {
+    const t = tracks[i];
+    if (t) setCurrentId(t.id);
+  }
   function selectTrack(i: number) {
     if (i === index) togglePlay();
     else setIndex(i);
@@ -79,21 +94,21 @@ export default function AudioPlayer({ tracks: initial }: { tracks: AudioFile[] }
   /* ─── Delete ─── */
   async function doDelete(id: string) {
     setDeleteBusy(true);
+    setActionError(null);
     try {
-      const res = await fetch(`/api/file?id=${id}`, { method: "DELETE" });
-      if (res.ok) {
-        const newTracks = tracks.filter((t) => t.id !== id);
-        setTracks(newTracks);
-        if (current?.id === id) {
-          const a = audioRef.current;
-          if (a) { a.pause(); a.src = ""; }
-          setPlaying(false);
-          setIndex(-1);
-        }
+      await deleteDriveFile(id);
+      setTracks((prev) => prev.filter((t) => t.id !== id));
+      if (currentId === id) {
+        const a = audioRef.current;
+        if (a) { a.pause(); a.removeAttribute("src"); a.load(); }
+        setPlaying(false);
+        setCurrentId(null);
       }
+      setConfirmDeleteId(null);
+    } catch (e) {
+      setActionError({ id, msg: e instanceof Error ? e.message : "Eliminazione non riuscita" });
     } finally {
       setDeleteBusy(false);
-      setConfirmDeleteId(null);
     }
   }
 
@@ -108,17 +123,17 @@ export default function AudioPlayer({ tracks: initial }: { tracks: AudioFile[] }
     if (!track || !editName.trim()) { setEditId(null); return; }
     const { ext } = splitNameExt(track.name);
     const newName = ext ? `${editName.trim()}.${ext}` : editName.trim();
+    if (newName === track.name) { setEditId(null); return; }
     setRenameBusy(true);
+    setActionError(null);
     try {
-      const res = await fetch(`/api/file?id=${id}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: newName }),
-      });
-      if (res.ok) setTracks((prev) => prev.map((t) => t.id === id ? { ...t, name: newName } : t));
+      const saved = await renameDriveFile(id, newName);
+      setTracks((prev) => prev.map((t) => t.id === id ? { ...t, name: saved } : t));
+      setEditId(null);
+    } catch (e) {
+      setActionError({ id, msg: e instanceof Error ? e.message : "Rinomina non riuscita" });
     } finally {
       setRenameBusy(false);
-      setEditId(null);
     }
   }
 
@@ -172,8 +187,8 @@ export default function AudioPlayer({ tracks: initial }: { tracks: AudioFile[] }
                 </button>
 
                 <a
-                  href={streamUrl(t.id, true)}
-                  download
+                  href={streamUrl(t.id, true, t.modifiedTime)}
+                  download={t.name}
                   className="shrink-0 rounded-full p-2 text-sand/40 transition hover:text-sky"
                   aria-label="Scarica"
                 >
@@ -210,6 +225,10 @@ export default function AudioPlayer({ tracks: initial }: { tracks: AudioFile[] }
                 />
               )}
 
+              {actionError?.id === t.id && (
+                <p className="mt-1 px-1 text-xs text-coral">{actionError.msg}</p>
+              )}
+
               {/* Conferma eliminazione */}
               {isConfirmDel && (
                 <div className="mt-1 flex items-center gap-2 rounded-xl border border-coral/30 bg-coral/10 px-3 py-2.5">
@@ -242,7 +261,11 @@ export default function AudioPlayer({ tracks: initial }: { tracks: AudioFile[] }
                       autoFocus
                       value={editName}
                       onChange={(e) => setEditName(e.target.value)}
-                      onKeyDown={(e) => e.key === "Enter" && saveRename(t.id)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") saveRename(t.id);
+                        if (e.key === "Escape") setEditId(null);
+                      }}
+                      enterKeyHint="done"
                       className="field flex-1 text-sm"
                       placeholder="Nome file"
                     />
@@ -274,10 +297,13 @@ export default function AudioPlayer({ tracks: initial }: { tracks: AudioFile[] }
       {trimTrack && (
         <TrimModal
           track={trimTrack}
+          folderName={folderName}
           onClose={() => setTrimTrack(null)}
           onOverwrite={(updated) => {
             setTracks((prev) => prev.map((t) => (t.id === updated.id ? updated : t)));
-            setTrimTrack(null);
+          }}
+          onSavedNew={(added) => {
+            setTracks((prev) => [...prev, added].sort((a, b) => a.name.localeCompare(b.name)));
           }}
         />
       )}

@@ -12,6 +12,7 @@ export interface AudioFile {
   name: string;
   mimeType: string;
   size: number;
+  modifiedTime?: string;
 }
 export interface MediaFile {
   id: string;
@@ -76,6 +77,39 @@ export async function fetchMedia(folder: string): Promise<MediaFile[]> {
   return (await jsonOrThrow(await fetchRetry(`/api/media?folder=${encodeURIComponent(folder)}`))).files;
 }
 
-export function streamUrl(id: string, download = false): string {
-  return `/api/stream?id=${encodeURIComponent(id)}${download ? "&download=1" : ""}`;
+/** URL di stream. `version` (es. modifiedTime) evita che il browser riusi una copia in cache stantia. */
+export function streamUrl(id: string, download = false, version?: string): string {
+  return (
+    `/api/stream?id=${encodeURIComponent(id)}` +
+    (download ? "&download=1" : "") +
+    (version ? `&v=${encodeURIComponent(version)}` : "")
+  );
+}
+
+/** PIN salvato sul telefono (se la band ha impostato UPLOAD_PIN). */
+export function storedPin(): string {
+  try {
+    return localStorage.getItem("afdsa-pin") || "";
+  } catch {
+    return "";
+  }
+}
+
+/** Sposta un file nel cestino di Drive. Lancia un Error con messaggio leggibile se fallisce. */
+export async function deleteDriveFile(id: string): Promise<void> {
+  const res = await fetchRetry(`/api/file?id=${encodeURIComponent(id)}`, {
+    method: "DELETE",
+    headers: { "x-pin": storedPin() },
+  });
+  await jsonOrThrow(res);
+}
+
+/** Rinomina un file. Ritorna il nome effettivamente salvato (ripulito dal server). */
+export async function renameDriveFile(id: string, name: string): Promise<string> {
+  const res = await fetchRetry(`/api/file?id=${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json", "x-pin": storedPin() },
+    body: JSON.stringify({ name }),
+  });
+  return (await jsonOrThrow(res)).name || name;
 }

@@ -1,12 +1,14 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 import type { MediaFile } from "@/lib/library";
-import { streamUrl } from "@/lib/library";
+import { deleteDriveFile, renameDriveFile, streamUrl } from "@/lib/library";
 import { splitNameExt } from "@/lib/format";
 
 export default function MediaGrid({ files: initialFiles }: { files: MediaFile[] }) {
   const [files, setFiles] = useState<MediaFile[]>(initialFiles);
+  const [viewer, setViewer] = useState<string | null>(null); // id foto aperta
 
   function handleDelete(id: string) {
     setFiles((prev) => prev.filter((f) => f.id !== id));
@@ -17,6 +19,7 @@ export default function MediaGrid({ files: initialFiles }: { files: MediaFile[] 
 
   const photos = files.filter((f) => f.subfolder === "foto");
   const videos = files.filter((f) => f.subfolder === "video");
+  const viewIdx = viewer ? photos.findIndex((p) => p.id === viewer) : -1;
 
   if (files.length === 0) return null;
 
@@ -29,7 +32,16 @@ export default function MediaGrid({ files: initialFiles }: { files: MediaFile[] 
           </p>
           <div className="grid grid-cols-3 gap-1">
             {photos.map((f) => (
-              <PhotoThumb key={f.id} file={f} onDelete={handleDelete} />
+              <button
+                key={f.id}
+                type="button"
+                onClick={() => setViewer(f.id)}
+                className="relative aspect-square overflow-hidden rounded-lg bg-dark-bg/60 transition active:scale-[0.97]"
+                aria-label={`Apri foto ${f.name}`}
+              >
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img src={streamUrl(f.id)} alt="" className="h-full w-full object-cover" loading="lazy" />
+              </button>
             ))}
           </div>
         </div>
@@ -46,76 +58,157 @@ export default function MediaGrid({ files: initialFiles }: { files: MediaFile[] 
           </div>
         </div>
       )}
+
+      {viewIdx >= 0 && (
+        <PhotoViewer
+          photos={photos}
+          index={viewIdx}
+          onIndex={(i) => setViewer(photos[i]?.id ?? null)}
+          onClose={() => setViewer(null)}
+          onDeleted={(id) => {
+            // dopo l'eliminazione passa alla foto successiva (o chiudi se era l'ultima)
+            const next = photos[viewIdx + 1] ?? photos[viewIdx - 1];
+            handleDelete(id);
+            setViewer(next && next.id !== id ? next.id : null);
+          }}
+        />
+      )}
     </div>
   );
 }
 
-/* ─── Foto ─── */
+/* ─── Visualizzatore foto a schermo intero ─── */
 
-function PhotoThumb({
-  file,
-  onDelete,
+function PhotoViewer({
+  photos,
+  index,
+  onIndex,
+  onClose,
+  onDeleted,
 }: {
-  file: MediaFile;
-  onDelete: (id: string) => void;
+  photos: MediaFile[];
+  index: number;
+  onIndex: (i: number) => void;
+  onClose: () => void;
+  onDeleted: (id: string) => void;
 }) {
+  const file = photos[index];
   const [confirm, setConfirm] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [touchX, setTouchX] = useState<number | null>(null);
+
+  useEffect(() => {
+    setConfirm(false);
+    setError(null);
+  }, [file.id]);
+
+  useEffect(() => {
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+      if (e.key === "ArrowRight" && index < photos.length - 1) onIndex(index + 1);
+      if (e.key === "ArrowLeft" && index > 0) onIndex(index - 1);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => {
+      document.body.style.overflow = prev;
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [index, photos.length, onClose, onIndex]);
 
   async function doDelete() {
     setBusy(true);
+    setError(null);
     try {
-      const res = await fetch(`/api/file?id=${file.id}`, { method: "DELETE" });
-      if (res.ok) onDelete(file.id);
+      await deleteDriveFile(file.id);
+      onDeleted(file.id);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Eliminazione non riuscita");
     } finally {
       setBusy(false);
-      setConfirm(false);
     }
   }
 
-  return (
-    <div className="group relative aspect-square overflow-hidden rounded-lg bg-dark-bg/60">
-      {/* eslint-disable-next-line @next/next/no-img-element */}
-      <img
-        src={streamUrl(file.id)}
-        alt={file.name}
-        className="h-full w-full object-cover"
-        loading="lazy"
-      />
-      <div className="absolute inset-0 flex items-end justify-between bg-gradient-to-t from-black/50 to-transparent p-1.5 opacity-0 transition group-hover:opacity-100 group-active:opacity-100">
+  return createPortal(
+    <div
+      className="fixed inset-0 z-[100] flex flex-col bg-black"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Foto"
+      onTouchStart={(e) => setTouchX(e.touches[0].clientX)}
+      onTouchEnd={(e) => {
+        if (touchX === null) return;
+        const dx = e.changedTouches[0].clientX - touchX;
+        setTouchX(null);
+        if (dx < -50 && index < photos.length - 1) onIndex(index + 1);
+        if (dx > 50 && index > 0) onIndex(index - 1);
+      }}
+    >
+      <div
+        className="flex items-center justify-between px-3 pb-2 text-white"
+        style={{ paddingTop: "max(12px, env(safe-area-inset-top))" }}
+      >
+        <button
+          type="button"
+          onClick={onClose}
+          aria-label="Chiudi"
+          className="flex h-10 w-10 items-center justify-center rounded-full bg-white/10"
+        >
+          <CloseIcon />
+        </button>
+        <span className="text-sm text-white/70">
+          {index + 1} / {photos.length}
+        </span>
+        <span className="w-10" />
+      </div>
+
+      <div className="relative flex min-h-0 flex-1 items-center justify-center">
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img src={streamUrl(file.id)} alt={file.name} className="max-h-full max-w-full object-contain" />
+      </div>
+
+      <div
+        className="flex flex-col gap-2 px-4 pt-3"
+        style={{ paddingBottom: "max(16px, env(safe-area-inset-bottom))" }}
+      >
+        {error && <p className="text-center text-sm text-coral">{error}</p>}
         {confirm ? (
-          <div className="flex w-full items-center justify-between gap-1">
+          <div className="flex items-center gap-2">
+            <p className="flex-1 text-sm text-white/80">Eliminare questa foto?</p>
             <button
               type="button"
               onClick={doDelete}
               disabled={busy}
-              className="flex-1 rounded-lg bg-coral/90 py-1.5 text-[10px] font-semibold text-white active:scale-95 disabled:opacity-50"
+              className="rounded-lg bg-coral px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
             >
-              {busy ? "…" : "Sì"}
+              {busy ? "…" : "Elimina"}
             </button>
             <button
               type="button"
               onClick={() => setConfirm(false)}
-              className="flex-1 rounded-lg bg-dark-bg/80 py-1.5 text-[10px] font-semibold text-sand active:scale-95"
+              className="rounded-lg px-3 py-2 text-sm text-white/60"
             >
               No
             </button>
           </div>
         ) : (
-          <>
+          <div className="flex items-center justify-center gap-4">
+            <ShareButton file={file} large />
             <button
               type="button"
               onClick={() => setConfirm(true)}
-              title="Elimina"
-              className="flex h-7 w-7 items-center justify-center rounded-full bg-dark-bg/80 text-sand/60 transition hover:text-coral active:scale-95"
+              aria-label="Elimina"
+              className="flex h-11 w-11 items-center justify-center rounded-full bg-white/10 text-white/80 transition active:scale-95"
             >
-              <TrashIcon size={13} />
+              <TrashIcon size={18} />
             </button>
-            <ShareButton file={file} />
-          </>
+          </div>
         )}
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
 
@@ -134,21 +227,26 @@ function VideoCard({
   const [editing, setEditing] = useState(false);
   const [editVal, setEditVal] = useState("");
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   async function doDelete() {
     setBusy(true);
+    setError(null);
     try {
-      const res = await fetch(`/api/file?id=${file.id}`, { method: "DELETE" });
-      if (res.ok) onDelete(file.id);
+      await deleteDriveFile(file.id);
+      onDelete(file.id);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Eliminazione non riuscita");
+      setConfirm(false);
     } finally {
       setBusy(false);
-      setConfirm(false);
     }
   }
 
   function startEdit() {
     setEditing(true);
     setConfirm(false);
+    setError(null);
     const { base } = splitNameExt(file.name);
     setEditVal(base);
   }
@@ -157,17 +255,16 @@ function VideoCard({
     if (!editVal.trim()) { setEditing(false); return; }
     const { ext } = splitNameExt(file.name);
     const newName = ext ? `${editVal.trim()}.${ext}` : editVal.trim();
+    if (newName === file.name) { setEditing(false); return; }
     setBusy(true);
+    setError(null);
     try {
-      const res = await fetch(`/api/file?id=${file.id}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: newName }),
-      });
-      if (res.ok) onRename(file.id, newName);
+      onRename(file.id, await renameDriveFile(file.id, newName));
+      setEditing(false);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Rinomina non riuscita");
     } finally {
       setBusy(false);
-      setEditing(false);
     }
   }
 
@@ -178,9 +275,11 @@ function VideoCard({
         controls
         playsInline
         preload="metadata"
-        className="w-full"
+        className="w-full bg-black"
         style={{ maxHeight: 260 }}
       />
+
+      {error && <p className="px-3 pt-2 text-xs text-coral">{error}</p>}
 
       {editing ? (
         <div className="flex items-center gap-2 px-3 py-2">
@@ -188,7 +287,11 @@ function VideoCard({
             autoFocus
             value={editVal}
             onChange={(e) => setEditVal(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && saveRename()}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") saveRename();
+              if (e.key === "Escape") setEditing(false);
+            }}
+            enterKeyHint="done"
             className="field flex-1 text-sm"
           />
           <button
@@ -228,11 +331,11 @@ function VideoCard({
         </div>
       ) : (
         <div className="flex items-center gap-2 px-3 py-2">
-          <p className="truncate text-sm text-sand/70">{file.name}</p>
+          <p className="min-w-0 flex-1 truncate text-sm text-sand/70">{splitNameExt(file.name).base}</p>
           <button
             type="button"
             onClick={startEdit}
-            title="Rinomina"
+            aria-label="Rinomina"
             className="shrink-0 rounded-full p-1.5 text-sand/40 transition hover:text-sand"
           >
             <PencilIcon />
@@ -241,7 +344,7 @@ function VideoCard({
           <button
             type="button"
             onClick={() => setConfirm(true)}
-            title="Elimina"
+            aria-label="Elimina"
             className="shrink-0 rounded-full p-1.5 text-sand/40 transition hover:text-coral"
           >
             <TrashIcon size={15} />
@@ -254,51 +357,62 @@ function VideoCard({
 
 /* ─── ShareButton ─── */
 
-function ShareButton({ file }: { file: MediaFile }) {
+function download(file: MediaFile) {
+  // download diretto dal server (nome file corretto via Content-Disposition), senza blob in memoria
+  const a = document.createElement("a");
+  a.href = streamUrl(file.id, true);
+  a.download = file.name;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+}
+
+function ShareButton({ file, large }: { file: MediaFile; large?: boolean }) {
   const [busy, setBusy] = useState(false);
-  const isWebm = file.mimeType.startsWith("video/webm");
+  // webm non è condivisibile su iOS/WhatsApp: meglio scaricarlo
+  const canShareFiles =
+    typeof navigator !== "undefined" &&
+    typeof navigator.share === "function" &&
+    !file.mimeType.startsWith("video/webm");
 
   async function handleClick() {
+    if (!canShareFiles) return download(file);
     setBusy(true);
     try {
       const res = await fetch(streamUrl(file.id));
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const blob = await res.blob();
-      if (isWebm) {
-        const a = document.createElement("a");
-        a.href = URL.createObjectURL(blob);
-        a.download = file.name;
-        a.click();
-        return;
-      }
       const f = new File([blob], file.name, { type: file.mimeType });
-      if (typeof navigator.share === "function") {
-        await navigator.share({ files: [f], title: file.name });
-      } else {
-        const a = document.createElement("a");
-        a.href = URL.createObjectURL(blob);
-        a.download = file.name;
-        a.click();
-      }
-    } catch { /* annullato */ } finally {
+      if (navigator.canShare && !navigator.canShare({ files: [f] })) return download(file);
+      await navigator.share({ files: [f], title: file.name });
+    } catch (e) {
+      // annullato dall'utente → niente; altri errori (es. attivazione utente scaduta) → scarica
+      if (!(e instanceof DOMException && e.name === "AbortError")) download(file);
+    } finally {
       setBusy(false);
     }
   }
 
+  const label = canShareFiles ? "Condividi" : "Scarica";
   return (
     <button
       type="button"
       onClick={handleClick}
       disabled={busy}
-      title={isWebm ? "Scarica" : "Condividi"}
-      aria-label={isWebm ? "Scarica" : "Condividi"}
-      className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-dark-bg/80 text-sand/60 transition hover:text-sand active:scale-95 disabled:opacity-40"
+      title={label}
+      aria-label={label}
+      className={
+        large
+          ? "flex h-11 w-11 items-center justify-center rounded-full bg-white/10 text-white/80 transition active:scale-95 disabled:opacity-40"
+          : "flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-dark-bg/80 text-sand/60 transition hover:text-sand active:scale-95 disabled:opacity-40"
+      }
     >
       {busy ? (
         <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-sand/30 border-t-sand" />
-      ) : isWebm ? (
-        <DownloadIcon />
-      ) : (
+      ) : canShareFiles ? (
         <ShareIcon />
+      ) : (
+        <DownloadIcon />
       )}
     </button>
   );
@@ -334,6 +448,13 @@ function PencilIcon() {
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
       <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
       <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
+    </svg>
+  );
+}
+function CloseIcon() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+      <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
     </svg>
   );
 }

@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { setRecording as setGlobalRecording } from "@/lib/queue";
 
 type Mode = "audio" | "video" | "foto";
 const MODES: Mode[] = ["audio", "video", "foto"];
@@ -109,12 +110,44 @@ export default function Recorder({ onRecorded }: { onRecorded: (blob: Blob) => v
     if (mode === "audio") {
       if (!recording) stopStream();
     } else {
-      openCamera();
+      openCamera(facingMode);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mode]);
 
-  useEffect(() => () => { stopTimer(); stopStream(); }, []);
+  // Stato "sto registrando" visibile al resto dell'app (tab bar, avviso di chiusura)
+  useEffect(() => {
+    setGlobalRecording(recording);
+  }, [recording]);
+
+  // Il wake lock viene rilasciato dal browser quando la pagina va in background: riprendilo al ritorno
+  useEffect(() => {
+    function onVis() {
+      if (document.visibilityState === "visible" && recRef.current?.state === "recording") acquireWakeLock();
+    }
+    document.addEventListener("visibilitychange", onVis);
+    return () => document.removeEventListener("visibilitychange", onVis);
+  }, []);
+
+  useEffect(
+    () => () => {
+      // Smontaggio (es. cambio tab) durante una registrazione: chiudila in modo pulito,
+      // così onstop consegna comunque il file alla coda.
+      const rec = recRef.current;
+      if (rec && rec.state !== "inactive") {
+        try { rec.stop(); } catch { /* ignora */ }
+      }
+      stopTimer();
+      releaseWakeLock();
+      setGlobalRecording(false);
+      // lascia a onstop il tempo di raccogliere l'ultimo chunk prima di chiudere i track
+      const s = streamRef.current;
+      setTimeout(() => s?.getTracks().forEach((t) => t.stop()), 300);
+      streamRef.current = null;
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [],
+  );
 
   function stopTimer() {
     if (timerRef.current) clearInterval(timerRef.current);
@@ -133,6 +166,7 @@ export default function Recorder({ onRecorded }: { onRecorded: (blob: Blob) => v
       return;
     }
     setCameraReady(false);
+    setError(null);
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
         video: { facingMode: facing },
@@ -397,8 +431,21 @@ export default function Recorder({ onRecorded }: { onRecorded: (blob: Blob) => v
               />
             )}
             {!cameraReady && !fullscreen && (
-              <div className="absolute inset-0 flex items-center justify-center">
-                <p className="text-sm text-sand/50">Apertura fotocamera…</p>
+              <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 px-4 text-center">
+                {error ? (
+                  <>
+                    <p className="text-sm text-coral">{error}</p>
+                    <button
+                      type="button"
+                      onClick={() => openCamera(facingMode)}
+                      className="rounded-lg border border-dark-border px-3 py-1.5 text-xs font-medium text-sand/80"
+                    >
+                      Riprova
+                    </button>
+                  </>
+                ) : (
+                  <p className="text-sm text-sand/50">Apertura fotocamera…</p>
+                )}
               </div>
             )}
             {cameraReady && !recording && !fullscreen && (
@@ -493,7 +540,9 @@ export default function Recorder({ onRecorded }: { onRecorded: (blob: Blob) => v
           </div>
         )}
 
-        {error && <p className="text-center text-sm text-coral px-4">{error}</p>}
+        {error && (mode === "audio" || cameraReady) && (
+          <p className="text-center text-sm text-coral px-4">{error}</p>
+        )}
       </div>
     </>
   );

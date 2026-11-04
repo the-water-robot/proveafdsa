@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { fetchFolders, fetchMeta, type DriveFolder } from "@/lib/library";
 import { moodById, type ProvaMeta } from "@/lib/band";
+import { prettyFolderDate } from "@/lib/format";
 
 export default function ProveList() {
   const [folders, setFolders] = useState<DriveFolder[] | null>(null);
@@ -11,17 +12,31 @@ export default function ProveList() {
   const [metas, setMetas] = useState<Record<string, ProvaMeta>>({});
 
   useEffect(() => {
+    let cancelled = false;
     fetchFolders()
-      .then((fs) => {
+      .then(async (fs) => {
+        if (cancelled) return;
         setFolders(fs);
-        // riassunti metadati in parallelo (mood + presenti)
-        fs.forEach((f) =>
-          fetchMeta(f.id)
-            .then((m) => setMetas((prev) => ({ ...prev, [f.id]: m })))
-            .catch(() => {}),
-        );
+        // riassunti metadati (mood + presenti): max 4 richieste alla volta, dalla più recente,
+        // per non saturare le quote di Drive quando le prove diventano tante
+        const queue = [...fs];
+        const worker = async () => {
+          for (let f = queue.shift(); f && !cancelled; f = queue.shift()) {
+            const id = f.id;
+            try {
+              const m = await fetchMeta(id);
+              if (!cancelled) setMetas((prev) => ({ ...prev, [id]: m }));
+            } catch {
+              /* ignora: resta "…" */
+            }
+          }
+        };
+        await Promise.all([worker(), worker(), worker(), worker()]);
       })
-      .catch((e) => setError(e instanceof Error ? e.message : "Errore"));
+      .catch((e) => !cancelled && setError(e instanceof Error ? e.message : "Errore"));
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   return (
@@ -37,7 +52,13 @@ export default function ProveList() {
       {error && (
         <p className="card border-coral/40 bg-coral/10 p-4 text-sm text-coral">{error}</p>
       )}
-      {folders === null && !error && <p className="text-sm text-sand/50">Carico…</p>}
+      {folders === null && !error && (
+        <ul className="flex flex-col gap-2" aria-hidden>
+          {[0, 1, 2].map((i) => (
+            <li key={i} className="card h-[76px] animate-pulse" />
+          ))}
+        </ul>
+      )}
       {folders && folders.length === 0 && (
         <p className="card p-5 text-sm text-sand/60">
           Ancora nessuna prova. Vai su <b>Carica</b> per iniziare.
@@ -58,7 +79,9 @@ export default function ProveList() {
                   {mood ? mood.emoji : "🎶"}
                 </div>
                 <div className="min-w-0 flex-1">
-                  <p className="font-display text-base font-semibold">{f.name}</p>
+                  <p className="font-display text-base font-semibold first-letter:uppercase">
+                    {prettyFolderDate(f.name)}
+                  </p>
                   <p className="text-xs text-sand/50">
                     {m
                       ? m.present.length

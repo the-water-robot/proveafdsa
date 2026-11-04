@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { streamFile } from "@/lib/drive";
+import { assertInRoot, errorStatus, streamFile } from "@/lib/drive";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -15,11 +15,12 @@ export async function GET(req: NextRequest) {
   const download = req.nextUrl.searchParams.get("download");
 
   try {
+    const info = await assertInRoot(id);
     const upstream = await streamFile(id, req.headers.get("range"));
     if (!upstream.ok && upstream.status !== 206) {
       return NextResponse.json(
         { error: `Drive ${upstream.status}` },
-        { status: upstream.status === 404 ? 404 : 502 },
+        { status: upstream.status === 404 ? 404 : upstream.status === 416 ? 416 : 502 },
       );
     }
 
@@ -29,13 +30,20 @@ export async function GET(req: NextRequest) {
       if (v) headers.set(h, v);
     }
     if (!headers.has("accept-ranges")) headers.set("accept-ranges", "bytes");
+    // L'URL include ?v=<modifiedTime> lato client: dopo un taglio/sovrascrittura cambia → niente cache stantia.
     headers.set("cache-control", "private, max-age=3600");
-    if (download) headers.set("content-disposition", "attachment");
+    if (download) {
+      const ascii = info.name.replace(/[^\x20-\x7e]/g, "_").replace(/["\\]/g, "_");
+      headers.set(
+        "content-disposition",
+        `attachment; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(info.name)}`,
+      );
+    }
 
     return new Response(upstream.body, { status: upstream.status, headers });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Errore";
     console.error("[stream]", message);
-    return NextResponse.json({ error: message }, { status: 500 });
+    return NextResponse.json({ error: message }, { status: errorStatus(err) });
   }
 }

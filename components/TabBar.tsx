@@ -2,9 +2,13 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useSyncExternalStore } from "react";
+import { getServerSnapshot, getSnapshot, subscribe } from "@/lib/queue";
 
 export default function TabBar() {
   const path = usePathname();
+  const { recording, uploading, items } = useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot);
+  const pending = items.filter((i) => i.status !== "done").length;
   const tabs = [
     { href: "/", label: "Carica", active: path === "/", Icon: UploadIcon },
     { href: "/prove", label: "Prove", active: path.startsWith("/prove"), Icon: MusicIcon },
@@ -19,11 +23,31 @@ export default function TabBar() {
           <Link
             key={href}
             href={href}
-            className={`flex flex-1 flex-col items-center justify-center gap-0.5 text-[11px] font-medium transition ${
+            onClick={(e) => {
+              if (
+                !active &&
+                recording &&
+                !window.confirm("Stai registrando: se cambi pagina la registrazione si ferma (resta in coda). Continuare?")
+              ) {
+                e.preventDefault();
+              }
+            }}
+            aria-current={active ? "page" : undefined}
+            className={`relative flex flex-1 flex-col items-center justify-center gap-0.5 text-[11px] font-medium transition ${
               active ? "text-flamingo" : "text-sand/50 hover:text-sand/80"
             }`}
           >
-            <Icon />
+            <span className="relative">
+              <Icon />
+              {href === "/" && (recording || uploading || pending > 0) && (
+                <span
+                  className={`absolute -right-1.5 -top-1 h-2.5 w-2.5 rounded-full ring-2 ring-dark-bg ${
+                    recording ? "animate-pulse bg-coral" : uploading ? "animate-pulse bg-sky" : "bg-solar"
+                  }`}
+                  aria-label={recording ? "Registrazione in corso" : uploading ? "Caricamento in corso" : "File da caricare"}
+                />
+              )}
+            </span>
             {label}
           </Link>
         ))}

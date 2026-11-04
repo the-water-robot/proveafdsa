@@ -76,3 +76,31 @@ export function buildFileName(parts: {
   const stem = segs.join(" — ") || "file";
   return parts.ext ? `${stem}.${parts.ext}` : stem;
 }
+
+/** "2026 05 30" → "2026-05-30" (null se il nome non è una data). */
+export function isoFromFolderName(name: string): string | null {
+  const m = /^(\d{4}) (\d{2}) (\d{2})$/.exec(name.trim());
+  return m ? `${m[1]}-${m[2]}-${m[3]}` : null;
+}
+
+/** "2026 05 30" → "sabato 30 maggio 2026" (fallback: il nome così com'è). */
+export function prettyFolderDate(name: string, withYear = true): string {
+  const iso = isoFromFolderName(name);
+  if (!iso) return name;
+  const [y, m, d] = iso.split("-").map(Number);
+  const date = new Date(y, m - 1, d);
+  return date.toLocaleDateString("it-IT", {
+    weekday: "long",
+    day: "numeric",
+    month: "long",
+    ...(withYear ? { year: "numeric" } : {}),
+  });
+}
+
+/** Dimensione leggibile. */
+export function formatBytes(n: number): string {
+  if (!n) return "";
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(0)} KB`;
+  return `${(n / 1024 / 1024).toFixed(1)} MB`;
+}

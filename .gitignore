@@ -32,3 +32,5 @@ next-env.d.ts
 # appunti privati / segreti di handoff (NON committare)
 /GOOGLE-AUTH-NOTES.md
 /VERCEL-TOKEN.md
+.env*
+!.env.local.example

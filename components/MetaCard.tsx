@@ -189,6 +189,7 @@ export default function MetaCard({
           value={draft.notes}
           onChange={(e) => setDraft((d) => ({ ...d, notes: e.target.value }))}
           rows={3}
+          maxLength={2000}
           placeholder="es. provata 'Rosa', batteria un po' indietro…"
           className="field resize-y"
         />

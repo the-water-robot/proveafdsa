@@ -8,6 +8,7 @@ import MediaGrid from "@/components/MediaGrid";
 import MetaCard from "@/components/MetaCard";
 import { fetchFiles, fetchMedia, fetchMeta, type AudioFile, type MediaFile } from "@/lib/library";
 import { defaultMeta, type ProvaMeta } from "@/lib/band";
+import { prettyFolderDate } from "@/lib/format";
 
 export default function Page() {
   return (
@@ -55,8 +56,10 @@ function ProvaDetail() {
         <Link href="/prove" className="rounded-full p-1 text-sand/60 transition hover:text-sand" aria-label="Indietro">
           <BackGlyph />
         </Link>
-        <div>
-          <h1 className="font-display text-2xl font-bold leading-tight">{name}</h1>
+        <div className="min-w-0">
+          <h1 className="font-display text-2xl font-bold leading-tight first-letter:uppercase">
+            {prettyFolderDate(name)}
+          </h1>
           <p className="text-sm text-sand/60">Animali Fantastici del Sud America</p>
         </div>
       </header>
@@ -72,7 +75,7 @@ function ProvaDetail() {
         {files === null ? (
           <p className="text-sm text-sand/50">Carico…</p>
         ) : (
-          <AudioPlayer tracks={files} />
+          <AudioPlayer tracks={files} folderName={name} />
         )}
       </section>
 

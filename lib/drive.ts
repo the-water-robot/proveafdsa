@@ -39,6 +39,74 @@ async function driveFetch(token: string, url: string, init: RequestInit = {}): P
   });
 }
 
+/* ─────────────────────────  Controllo accessi  ───────────────────────── */
+
+/** Errore "di accesso": l'id non appartiene all'albero di DRIVE_FOLDER_ID (o non esiste). */
+export class DriveAccessError extends Error {
+  status: number;
+  constructor(message: string, status = 403) {
+    super(message);
+    this.status = status;
+  }
+}
+
+export interface FileInfo {
+  id: string;
+  name: string;
+  mimeType: string;
+}
+
+// Cache per istanza (warm lambda): id già verificati dentro la cartella della band.
+const insideRoot = new Map<string, FileInfo>();
+
+/**
+ * Verifica che `id` sia un file/cartella DENTRO DRIVE_FOLDER_ID (fino a 4 livelli: prova/sub/file).
+ * Il token ha scope `drive` pieno: senza questo controllo chiunque potrebbe leggere/eliminare
+ * qualsiasi file del proprietario conoscendone l'id.
+ */
+export async function assertInRoot(id: string): Promise<FileInfo> {
+  if (!/^[\w-]{10,}$/.test(id)) throw new DriveAccessError("Id non valido.", 400);
+  const cached = insideRoot.get(id);
+  if (cached) return cached;
+
+  const root = env("DRIVE_FOLDER_ID");
+  if (id === root) throw new DriveAccessError("Operazione non consentita.");
+  const token = await accessToken();
+
+  const chain: FileInfo[] = [];
+  let cur = id;
+  for (let depth = 0; depth < 4; depth++) {
+    const res = await driveFetch(
+      token,
+      `${DRIVE}/files/${encodeURIComponent(cur)}?fields=id,name,mimeType,parents&supportsAllDrives=true`,
+    );
+    if (res.status === 404) throw new DriveAccessError("File non trovato.", 404);
+    if (!res.ok) throw new Error(`Drive (metadati) ${res.status}: ${await res.text()}`);
+    const f = (await res.json()) as FileInfo & { parents?: string[] };
+    chain.push({ id: f.id, name: f.name, mimeType: f.mimeType });
+    const parents = f.parents ?? [];
+    const parentOk = parents.find((p) => p === root || insideRoot.has(p));
+    if (parentOk) {
+      for (const c of chain) insideRoot.set(c.id, c);
+      return chain[0];
+    }
+    if (!parents.length) break;
+    cur = parents[0];
+  }
+  throw new DriveAccessError("Operazione non consentita su questo file.");
+}
+
+/** Controllo del PIN opzionale (UPLOAD_PIN). */
+export function pinOk(provided: unknown): boolean {
+  const pin = process.env.UPLOAD_PIN?.trim();
+  return !pin || provided === pin;
+}
+
+/** Risposta JSON d'errore coerente per le route. */
+export function errorStatus(err: unknown): number {
+  return err instanceof DriveAccessError ? err.status : 500;
+}
+
 export interface SessionFolder {
   id: string;
   name: string;
@@ -137,6 +205,7 @@ export interface AudioFile {
   name: string;
   mimeType: string;
   size: number;
+  modifiedTime?: string;
 }
 export interface MediaFile {
   id: string;
@@ -157,7 +226,9 @@ export async function listRehearsalFolders(): Promise<DriveFolder[]> {
   const res = await driveFetch(token, url);
   if (!res.ok) throw new Error(`Drive (lista cartelle) ${res.status}: ${await res.text()}`);
   const j = (await res.json()) as { files?: DriveFolder[] };
-  return (j.files ?? []).filter((f) => /^\d{4} \d{2} \d{2}$/.test(f.name));
+  const folders = (j.files ?? []).filter((f) => /^\d{4} \d{2} \d{2}$/.test(f.name));
+  for (const f of folders) insideRoot.set(f.id, { id: f.id, name: f.name, mimeType: FOLDER_MIME });
+  return folders;
 }
 
 /** File audio dentro una cartella, in ordine cronologico (l'orario è in testa al nome). */
@@ -165,17 +236,25 @@ export async function listAudioFiles(folderId: string): Promise<AudioFile[]> {
   const token = await accessToken();
   const q = `'${folderId}' in parents and trashed = false and mimeType contains 'audio/'`;
   const url =
-    `${DRIVE}/files?q=${encodeURIComponent(q)}&fields=files(id,name,mimeType,size)&orderBy=name` +
+    `${DRIVE}/files?q=${encodeURIComponent(q)}&fields=files(id,name,mimeType,size,modifiedTime)&orderBy=name` +
     `&pageSize=1000&supportsAllDrives=true&includeItemsFromAllDrives=true`;
   const res = await driveFetch(token, url);
   if (!res.ok) throw new Error(`Drive (lista file) ${res.status}: ${await res.text()}`);
-  const j = (await res.json()) as { files?: { id: string; name: string; mimeType: string; size?: string }[] };
-  return (j.files ?? []).map((f) => ({
+  const j = (await res.json()) as {
+    files?: { id: string; name: string; mimeType: string; size?: string; modifiedTime?: string }[];
+  };
+  const files = (j.files ?? []).map((f) => ({
     id: f.id,
     name: f.name,
     mimeType: f.mimeType,
     size: Number(f.size ?? 0),
+    modifiedTime: f.modifiedTime,
   }));
+  // chiamata solo dopo assertInRoot(folderId) → i figli sono dentro la cartella della band
+  if (insideRoot.has(folderId)) {
+    for (const f of files) insideRoot.set(f.id, { id: f.id, name: f.name, mimeType: f.mimeType });
+  }
+  return files;
 }
 
 /** Stream del contenuto di un file da Drive, inoltrando l'header Range (per <audio> con seek). */
@@ -253,8 +332,10 @@ export async function listMediaFiles(sessionFolderId: string): Promise<MediaFile
     const filesJson = (await filesRes.json()) as {
       files?: { id: string; name: string; mimeType: string; size?: string }[];
     };
+    const trusted = insideRoot.has(sessionFolderId);
     for (const f of filesJson.files ?? []) {
       results.push({ id: f.id, name: f.name, mimeType: f.mimeType, size: Number(f.size ?? 0), subfolder });
+      if (trusted) insideRoot.set(f.id, { id: f.id, name: f.name, mimeType: f.mimeType });
     }
   }
   return results;
@@ -298,6 +379,8 @@ export async function createResumableUpdateSession(
     { method: "PATCH", headers, body: JSON.stringify(meta) },
   );
   if (!res.ok) throw new Error(`Drive (update session) ${res.status}: ${await res.text()}`);
+  const cached = insideRoot.get(fileId);
+  if (cached && newName) insideRoot.set(fileId, { ...cached, name: newName, mimeType });
   const location = res.headers.get("location");
   if (!location) throw new Error("URL di sessione mancante");
   return location;
@@ -306,12 +389,16 @@ export async function createResumableUpdateSession(
 /** Mette nel cestino un file Drive. */
 export async function deleteFile(fileId: string): Promise<void> {
   const token = await accessToken();
+  // PATCH trashed=true (recuperabile dal cestino di Drive per 30 giorni), non DELETE definitivo.
   const res = await driveFetch(token, `${DRIVE}/files/${fileId}?supportsAllDrives=true`, {
-    method: "DELETE",
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ trashed: true }),
   });
-  if (!res.ok && res.status !== 204) {
+  if (!res.ok) {
     throw new Error(`Drive (elimina) ${res.status}: ${await res.text()}`);
   }
+  insideRoot.delete(fileId);
 }
 
 /** Rinomina un file Drive. */
@@ -323,6 +410,8 @@ export async function renameFile(fileId: string, newName: string): Promise<void>
     body: JSON.stringify({ name: newName }),
   });
   if (!res.ok) throw new Error(`Drive (rinomina) ${res.status}: ${await res.text()}`);
+  const cached = insideRoot.get(fileId);
+  if (cached) insideRoot.set(fileId, { ...cached, name: newName });
 }
 
 /** Crea o aggiorna _prova.json dentro la cartella. */

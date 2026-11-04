@@ -38,11 +38,17 @@ export async function requestUploadSession(params: {
 }
 
 /** PUT del file sull'URL di sessione. `onProgress` riceve un valore 0..1. */
+export interface UploadedFile {
+  id?: string;
+  name?: string;
+  mimeType?: string;
+}
+
 export function putResumable(
   sessionUrl: string,
   file: Blob,
   onProgress?: (fraction: number) => void,
-): Promise<void> {
+): Promise<UploadedFile> {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     xhr.open("PUT", sessionUrl, true);
@@ -51,7 +57,14 @@ export function putResumable(
       if (e.lengthComputable && onProgress) onProgress(e.loaded / e.total);
     };
     xhr.onload = () => {
-      if (xhr.status >= 200 && xhr.status < 300) resolve();
+      if (xhr.status >= 200 && xhr.status < 300) {
+        // Google risponde con i metadati del file creato/aggiornato (id, name, mimeType)
+        try {
+          resolve(JSON.parse(xhr.responseText || "{}"));
+        } catch {
+          resolve({});
+        }
+      }
       else reject(new Error(`Upload fallito (HTTP ${xhr.status})`));
     };
     xhr.onerror = () => reject(new Error("Errore di rete durante l'upload"));
@@ -63,7 +76,7 @@ export function putResumable(
 export async function uploadOne(
   params: { rehearsalDate: string; fileName: string; file: Blob; subfolder?: string; pin?: string },
   onProgress?: (fraction: number) => void,
-): Promise<UploadSession> {
+): Promise<UploadSession & { file: UploadedFile }> {
   const session = await requestUploadSession({
     rehearsalDate: params.rehearsalDate,
     fileName: params.fileName,
@@ -71,6 +84,6 @@ export async function uploadOne(
     subfolder: params.subfolder,
     pin: params.pin,
   });
-  await putResumable(session.sessionUrl, params.file, onProgress);
-  return session;
+  const file = await putResumable(session.sessionUrl, params.file, onProgress);
+  return { ...session, file };
 }
