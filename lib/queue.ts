@@ -117,7 +117,7 @@ export function nameFor(item: QueueItem, who = state.who): string {
   return buildFileName({ time: item.time, who, label: item.label, base: item.base, ext: item.ext });
 }
 
-export function addBlob(file: Blob, base: string, ext: string): QueueItem {
+export function addBlob(file: Blob, base: string, ext: string, label?: string): QueueItem {
   const kind = kindOf(ext ? `x.${ext}` : "", file.type);
   const subfolder = kind === "video" ? "video" : kind === "image" ? "foto" : undefined;
   const item: QueueItem = {
@@ -128,7 +128,7 @@ export function addBlob(file: Blob, base: string, ext: string): QueueItem {
     time: timeLabel(),
     day: todayIso(),
     size: file.size,
-    label: state.nextLabel,
+    label: label || state.nextLabel,
     status: "ready",
     progress: 0,
     subfolder,

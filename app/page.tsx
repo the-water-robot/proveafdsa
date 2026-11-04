@@ -6,7 +6,7 @@ import Recorder from "@/components/Recorder";
 import LabelPicker from "@/components/LabelPicker";
 import { INSTRUMENT, MEMBERS, memberLabel } from "@/lib/band";
 import { extFromMime, formatBytes, prettyFolderDate, splitNameExt, todayIso } from "@/lib/format";
-import { findSong, rankSuggestions } from "@/lib/recording";
+import { findSong, rankSuggestions, titleFromFileName } from "@/lib/recording";
 import { ACCEPT } from "@/lib/mime";
 import { useSongs } from "@/lib/songs";
 import {
@@ -47,6 +47,7 @@ export default function Home() {
   const { items, uploading, recording, date, lastFolder, restoredCount, who, pin, autoUpload, nextLabel } = s;
   const [pinProtected, setPinProtected] = useState(false);
   const [configMissing, setConfigMissing] = useState<string[] | null>(null);
+  const [platform, setPlatform] = useState<"ios" | "android" | "other">("other");
   // picker aperto: per un file della coda, oppure per la prossima registrazione
   const [picker, setPicker] = useState<{ itemId: string; justRecorded?: boolean } | { next: true } | null>(null);
 
@@ -64,6 +65,15 @@ export default function Home() {
         if (!h.ok) setConfigMissing(h.missing || []);
       })
       .catch(() => {});
+
+    const ua = navigator.userAgent;
+    setPlatform(
+      /iPhone|iPad|iPod/.test(ua) || (ua.includes("Macintosh") && navigator.maxTouchPoints > 1)
+        ? "ios"
+        : /Android/.test(ua)
+          ? "android"
+          : "other",
+    );
 
     restoreQueue();
     importSharedFiles();
@@ -96,7 +106,9 @@ export default function Home() {
   const addFiles = useCallback((files: FileList | File[]) => {
     Array.from(files).forEach((f) => {
       const { base, ext } = splitNameExt(f.name);
-      addBlob(f, base || "file", ext || extFromMime(f.type));
+      const title = titleFromFileName(base);
+      // "Hermano.m4a" → pezzo "Hermano" (senza ripetere il nome nel file); nomi automatici restano com'erano
+      addBlob(f, title ? "" : base || "file", ext || extFromMime(f.type), title || undefined);
     });
   }, []);
 
@@ -135,7 +147,7 @@ export default function Home() {
           <h1 className="font-display text-2xl font-bold leading-tight">Prove</h1>
           <p className="text-sm text-sand/60">Animali Fantastici del Sud America</p>
         </div>
-        <span className="text-xs text-sand/30 font-mono">v16</span>
+        <span className="text-xs text-sand/30 font-mono">v17</span>
       </header>
 
       {configMissing && configMissing.length > 0 && (
@@ -272,6 +284,7 @@ export default function Home() {
         >
           <PaperclipIcon /> Scegli file
         </button>
+        <ImportHelp platform={platform} />
         <input
           ref={fileInputRef}
           type="file"
@@ -490,6 +503,55 @@ function QueueRow({
         </div>
       )}
     </div>
+  );
+}
+
+/* ---------- aiuto: caricare dai Memo Vocali (iPhone) / dal registratore (Android) ---------- */
+
+function ImportHelp({ platform }: { platform: "ios" | "android" | "other" }) {
+  if (platform === "other") return null;
+  return (
+    <details className="w-full rounded-xl border border-dark-border bg-dark-bg/40 px-4 py-3 text-sm text-sand/70">
+      <summary className="cursor-pointer select-none font-medium text-sand/80">
+        {platform === "ios" ? "🎙️ Caricare dai Memo Vocali" : "🎙️ Caricare dal registratore del telefono"}
+      </summary>
+      {platform === "ios" ? (
+        <div className="mt-3 flex flex-col gap-3">
+          <a
+            href="/carica-prove-afdsa.shortcut"
+            className="block rounded-xl bg-gradient-to-r from-violet to-sky px-4 py-3 text-center font-semibold text-white"
+          >
+            📲 Aggiungi il Comando rapido
+          </a>
+          <ol className="list-decimal space-y-1.5 pl-5 text-[13px] leading-snug">
+            <li>
+              Tocca il pulsante qui sopra → <b>Aggiungi comando rapido</b> (una volta sola).
+            </li>
+            <li>
+              Nei <b>Memo Vocali</b>: tocca il memo → <b>⋯</b> → <b>Condividi</b> →{" "}
+              <b>Carica su Prove AFdSA</b>.
+            </li>
+            <li>
+              La prima volta iPhone chiede il permesso di collegarsi: <b>Consenti sempre</b>. Finisce nella prova di
+              oggi, col nome del memo come titolo del pezzo 🎶
+            </li>
+          </ol>
+          <p className="text-[12px] text-sand/40">
+            In alternativa: nei Memo ⋯ → <b>Salva in File</b>, poi qui <b>Scegli file → Sfoglia</b>.
+          </p>
+        </div>
+      ) : (
+        <ol className="mt-3 list-decimal space-y-1.5 pl-5 text-[13px] leading-snug">
+          <li>
+            Installa l&apos;app: menu del browser <b>⋮</b> → <b>Aggiungi a schermata Home</b> (una volta sola).
+          </li>
+          <li>
+            Nel registratore (o in File/WhatsApp): tocca la registrazione → <b>Condividi</b> → <b>Prove AFdSA</b>.
+          </li>
+          <li>Si apre qui con il file in coda: dagli un nome e parte da solo ⚡</li>
+        </ol>
+      )}
+    </details>
   );
 }
 

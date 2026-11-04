@@ -45,6 +45,17 @@ export function recordedAt(name: string): string {
   return m ? `ore ${m[1]}:${m[2]}` : "";
 }
 
+/** Nomi file automatici (registratori, WhatsApp, fotocamere…): non sono un titolo di pezzo. */
+const AUTO_NAME =
+  /^(nuova registrazione|new recording|registrazione|recording|rec[\s_-]|voice|audio|aud[-_]|ptt[-_]|img[-_]|vid[-_]|pxl[-_]|dsc|mvi|video|foto|photo|memo|condiviso|file|untitled|senza titolo|\d)/i;
+
+/** Titolo del pezzo ricavato dal nome di un file scelto/condiviso, o "" se è un nome automatico. */
+export function titleFromFileName(base: string): string {
+  if (!base.trim() || AUTO_NAME.test(base.trim())) return "";
+  const t = base.replace(/[_]+/g, " ").replace(/\s+/g, " ").trim();
+  return t.length > 60 ? "" : t;
+}
+
 /* ─── Etichette rapide (sempre disponibili, oltre ai pezzi del repertorio) ─── */
 export const QUICK_LABELS = [
   { label: "soundcheck", emoji: "🎚️" },

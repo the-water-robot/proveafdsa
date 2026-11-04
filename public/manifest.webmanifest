@@ -23,7 +23,7 @@
       "text": "text",
       "url": "url",
       "files": [
-        { "name": "file", "accept": ["audio/*", "video/*", "image/*"] }
+        { "name": "file", "accept": ["audio/*", "video/*", "image/*", ".m4a", ".aac", ".mp3", ".wav", ".ogg", ".opus", ".flac", ".amr", ".3gp", ".3ga", ".caf", ".aiff", ".mov", ".mp4", ".heic"] }
       ]
     }
   }
