@@ -12,7 +12,7 @@ import { prettyFolderDate } from "@/lib/format";
 
 export default function Page() {
   return (
-    <Suspense fallback={<main className="px-4 pt-6 text-sm text-sand/50">Carico…</main>}>
+    <Suspense fallback={<main className="px-4 pt-safe text-sm text-sand/50">Carico…</main>}>
       <ProvaDetail />
     </Suspense>
   );
@@ -51,7 +51,7 @@ function ProvaDetail() {
   }, [id]);
 
   return (
-    <main className="pb-tabbar mx-auto flex min-h-[100dvh] max-w-md flex-col gap-4 px-4 pt-6">
+    <main className="pb-tabbar mx-auto flex min-h-[100dvh] max-w-md flex-col gap-4 px-4 pt-safe">
       <header className="flex items-center gap-3">
         <Link href="/prove" className="rounded-full p-1 text-sand/60 transition hover:text-sand" aria-label="Indietro">
           <BackGlyph />

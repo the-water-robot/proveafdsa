@@ -40,7 +40,7 @@ export default function ProveList() {
   }, []);
 
   return (
-    <main className="pb-tabbar mx-auto flex min-h-[100dvh] max-w-md flex-col gap-4 px-4 pt-6">
+    <main className="pb-tabbar mx-auto flex min-h-[100dvh] max-w-md flex-col gap-4 px-4 pt-safe">
       <header className="flex items-center gap-3">
         <img src="/icons/icon.svg" alt="" width={40} height={40} className="rounded-xl" />
         <div>

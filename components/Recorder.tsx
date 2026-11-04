@@ -24,6 +24,18 @@ function pickVideoMime(): string {
   return "";
 }
 
+// Per la MUSICA vanno spenti i filtri "da telefonata" che i browser attivano di default:
+// la soppressione del rumore mangia piatti e chitarre, il controllo automatico del guadagno
+// fa "pompare" il volume, la cancellazione dell'eco taglia frequenze. Memo Vocali non li usa.
+const MUSIC_AUDIO: MediaTrackConstraints = {
+  echoCancellation: false,
+  noiseSuppression: false,
+  autoGainControl: false,
+  channelCount: { ideal: 2 },
+  sampleRate: { ideal: 48000 },
+};
+const AUDIO_BITRATE = 192_000; // default dei browser ~128 kbps o meno
+
 function mmss(total: number): string {
   const m = Math.floor(total / 60);
   const s = total % 60;
@@ -170,7 +182,7 @@ export default function Recorder({ onRecorded }: { onRecorded: (blob: Blob) => v
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
         video: { facingMode: facing },
-        audio: true,
+        audio: MUSIC_AUDIO,
       });
       streamRef.current = stream;
       attachPreview(stream);
@@ -236,14 +248,21 @@ export default function Recorder({ onRecorded }: { onRecorded: (blob: Blob) => v
       let stream = streamRef.current;
       if (!stream) {
         stream = await navigator.mediaDevices.getUserMedia(
-          mode === "video" ? { audio: true, video: { facingMode } } : { audio: true },
+          mode === "video" ? { audio: MUSIC_AUDIO, video: { facingMode } } : { audio: MUSIC_AUDIO },
         );
         streamRef.current = stream;
         if (mode === "video") attachPreview(stream);
       }
 
       const mime = mode === "video" ? pickVideoMime() : pickAudioMime();
-      const rec = mime ? new MediaRecorder(stream, { mimeType: mime }) : new MediaRecorder(stream);
+      const opts: MediaRecorderOptions = { audioBitsPerSecond: AUDIO_BITRATE };
+      if (mime) opts.mimeType = mime;
+      let rec: MediaRecorder;
+      try {
+        rec = new MediaRecorder(stream, opts);
+      } catch {
+        rec = mime ? new MediaRecorder(stream, { mimeType: mime }) : new MediaRecorder(stream);
+      }
       chunksRef.current = [];
       rec.ondataavailable = (e) => { if (e.data?.size > 0) chunksRef.current.push(e.data); };
       rec.onstop = () => {

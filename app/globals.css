@@ -31,6 +31,17 @@ body {
       outline-none focus:border-sky/70 focus:ring-2 focus:ring-sky/20;
   }
 
+  /* iOS: il campo data ha una larghezza minima propria e testo centrato → esce dalla card */
+  input[type="date"].field {
+    @apply block min-w-0 max-w-full appearance-none text-left;
+    -webkit-appearance: none;
+    width: 100%;
+    min-height: 3.125rem;
+  }
+  input[type="date"].field::-webkit-date-and-time-value {
+    text-align: left;
+  }
+
   .label {
     @apply mb-1.5 block text-sm font-medium text-sand/70;
   }
@@ -57,5 +68,9 @@ body {
   /* Spazio per non finire sotto la tab bar fissa */
   .pb-tabbar {
     padding-bottom: calc(4.5rem + env(safe-area-inset-bottom));
+  }
+  /* Spazio sotto la barra di stato (PWA iOS con status bar trasparente) */
+  .pt-safe {
+    padding-top: calc(1.5rem + env(safe-area-inset-top));
   }
 }

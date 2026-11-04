@@ -116,14 +116,14 @@ export default function Home() {
   const folderName = date.replace(/-/g, " ");
 
   return (
-    <main className="mx-auto flex min-h-[100dvh] max-w-md flex-col gap-5 px-4 pb-[calc(9rem+env(safe-area-inset-bottom))] pt-6">
+    <main className="mx-auto flex min-h-[100dvh] max-w-md flex-col gap-5 px-4 pb-[calc(9rem+env(safe-area-inset-bottom))] pt-safe">
       <header className="flex items-center gap-3">
         <img src="/icons/icon.svg" alt="" width={48} height={48} className="rounded-xl" />
         <div className="flex-1">
           <h1 className="font-display text-2xl font-bold leading-tight">Prove</h1>
           <p className="text-sm text-sand/60">Animali Fantastici del Sud America</p>
         </div>
-        <span className="text-xs text-sand/30 font-mono">v10</span>
+        <span className="text-xs text-sand/30 font-mono">v11</span>
       </header>
 
       {configMissing && configMissing.length > 0 && (
