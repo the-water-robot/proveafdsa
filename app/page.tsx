@@ -4,6 +4,10 @@ import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "
 import Link from "next/link";
 import Recorder from "@/components/Recorder";
 import LabelPicker from "@/components/LabelPicker";
+import NoteEditor from "@/components/NoteEditor";
+import { AddNoteButtons } from "@/components/NotesSection";
+import { saveNote } from "@/lib/library";
+import { newNote, type MusicNote } from "@/lib/notes";
 import { INSTRUMENT, MEMBERS, memberLabel } from "@/lib/band";
 import { extFromMime, formatBytes, prettyFolderDate, splitNameExt, todayIso } from "@/lib/format";
 import { findSong, rankSuggestions, titleFromFileName } from "@/lib/recording";
@@ -50,6 +54,26 @@ export default function Home() {
   const [platform, setPlatform] = useState<"ios" | "android" | "other">("other");
   // picker aperto: per un file della coda, oppure per la prossima registrazione
   const [picker, setPicker] = useState<{ itemId: string; justRecorded?: boolean } | { next: true } | null>(null);
+
+  // appunto musicale al volo (finisce nella cartella della prova di `date`)
+  const [noteDraft, setNoteDraft] = useState<MusicNote | null>(null);
+  const [noteSaving, setNoteSaving] = useState(false);
+  const [noteError, setNoteError] = useState<string | null>(null);
+  const [noteSaved, setNoteSaved] = useState<{ folder: string; name: string } | null>(null);
+
+  async function saveQuickNote(n: MusicNote) {
+    setNoteSaving(true);
+    setNoteError(null);
+    try {
+      const res = await saveNote({ date }, n);
+      setNoteDraft(null);
+      setNoteSaved({ folder: res.folder, name: date.replace(/-/g, " ") });
+    } catch (e) {
+      setNoteError(e instanceof Error ? e.message : "Errore");
+    } finally {
+      setNoteSaving(false);
+    }
+  }
 
   const songs = useSongs();
   const quick = rankSuggestions(songs).ranked.slice(0, 4);
@@ -147,7 +171,7 @@ export default function Home() {
           <h1 className="font-display text-2xl font-bold leading-tight">Prove</h1>
           <p className="text-sm text-sand/60">Animali Fantastici del Sud America</p>
         </div>
-        <span className="text-xs text-sand/30 font-mono">v22</span>
+        <span className="text-xs text-sand/30 font-mono">v23</span>
       </header>
 
       {configMissing && configMissing.length > 0 && (
@@ -297,6 +321,39 @@ export default function Home() {
           }}
         />
       </section>
+
+      {/* Appunti musicali al volo */}
+      <section className="flex flex-col gap-2">
+        <h2 className="px-1 text-sm font-semibold text-sand/70">
+          Appunto al volo <span className="font-normal text-sand/40">· finisce nella prova del giorno</span>
+        </h2>
+        <AddNoteButtons
+          onAdd={(kind) => {
+            setNoteError(null);
+            setNoteSaved(null);
+            setNoteDraft(newNote(kind, { who: who.toLowerCase(), song: nextLabel }));
+          }}
+        />
+        {noteSaved && (
+          <Link
+            href={`/prove/${noteSaved.folder}?d=${encodeURIComponent(noteSaved.name)}`}
+            className="rounded-xl bg-lime/10 px-4 py-2.5 text-center text-sm font-medium text-lime"
+          >
+            Appunto salvato ✓ · vedi gli appunti della prova ›
+          </Link>
+        )}
+      </section>
+
+      {noteDraft && (
+        <NoteEditor
+          initial={noteDraft}
+          isNew
+          saving={noteSaving}
+          error={noteError}
+          onSave={saveQuickNote}
+          onClose={() => setNoteDraft(null)}
+        />
+      )}
 
       {/* Coda */}
       {items.length > 0 && (

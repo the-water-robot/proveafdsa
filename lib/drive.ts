@@ -5,6 +5,7 @@ import { folderNameForDate } from "./format";
 import { defaultMeta, sanitizeMeta, type ProvaMeta } from "./band";
 import { labelOf } from "./recording";
 import { kindOf, mimeFor } from "./mime";
+import { NOTES_FILE, sanitizeNote, type MusicNote } from "./notes";
 import { BEST_MIN, average, ratingKey, ratingsFromProps, type Ratings } from "./ratings";
 
 const DRIVE = "https://www.googleapis.com/drive/v3";
@@ -556,6 +557,7 @@ export interface FolderSummary {
   photos: number;
   videos: number;
   meta: ProvaMeta;
+  notes: number;
 }
 
 /** Riepilogo di più cartelle-prova con poche chiamate: sottocartelle, tutti i file, i _prova.json. */
@@ -569,10 +571,14 @@ export async function summarizeFolders(ids: string[]): Promise<FolderSummary[]> 
   const token = await accessToken();
 
   const sum = new Map<string, FolderSummary>(
-    valid.map((id) => [id, { id, best: 0, audio: 0, photos: 0, videos: 0, meta: defaultMeta() }]),
+    valid.map((id) => [id, { id, best: 0, audio: 0, photos: 0, videos: 0, notes: 0, meta: defaultMeta() }]),
   );
   const count = (s: FolderSummary | undefined, f: RawFile) => {
     if (!s || f.name === META_NAME) return;
+    if (f.name === NOTES_FILE) {
+      s.notes = Number(f.appProperties?.count) || 0; // contatore salvato sul file: niente download
+      return;
+    }
     const k = kindOf(f.name, f.mimeType);
     if (k === "audio") {
       s.audio++;
@@ -668,4 +674,49 @@ export async function listBestTracks(): Promise<AudioFile[]> {
   );
   bestCache = { at: Date.now(), tracks: out };
   return out;
+}
+
+/* ─────────────────  Appunti musicali (_appunti.json)  ───────────────── */
+
+async function readNotesWith(token: string, folderId: string): Promise<{ fileId: string | null; notes: MusicNote[] }> {
+  const fileId = await findFileByName(token, folderId, NOTES_FILE);
+  if (!fileId) return { fileId: null, notes: [] };
+  const res = await driveFetch(token, `${DRIVE}/files/${fileId}?alt=media&supportsAllDrives=true`);
+  if (!res.ok) throw new Error(`Drive (leggi appunti) ${res.status}: ${await res.text()}`);
+  const j = (await res.json().catch(() => ({}))) as { notes?: unknown[] };
+  const notes = (j.notes ?? []).map(sanitizeNote).filter((n): n is MusicNote => !!n);
+  return { fileId, notes };
+}
+
+/** Appunti della prova, dal più recente. */
+export async function readNotes(folderId: string): Promise<MusicNote[]> {
+  const { notes } = await readNotesWith(await accessToken(), folderId);
+  return notes.sort((a, b) => b.created - a.created);
+}
+
+/**
+ * Modifica gli appunti leggendo l'ultima versione da Drive subito prima di scrivere:
+ * due persone che aggiungono appunti diversi insieme non si cancellano a vicenda.
+ */
+export async function updateNotes(folderId: string, fn: (notes: MusicNote[]) => MusicNote[]): Promise<MusicNote[]> {
+  const token = await accessToken();
+  const { fileId, notes } = await readNotesWith(token, folderId);
+  const next = fn(notes).sort((a, b) => b.created - a.created);
+  const body = JSON.stringify({ version: 1, notes: next }, null, 1);
+  const metadata: Record<string, unknown> = { appProperties: { count: String(next.length) } };
+  if (!fileId) Object.assign(metadata, { name: NOTES_FILE, parents: [folderId], mimeType: "application/json" });
+  const boundary = `afdsa-notes-${Date.now()}`;
+  const multipart =
+    `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(metadata)}\r\n` +
+    `--${boundary}\r\nContent-Type: application/json\r\n\r\n${body}\r\n--${boundary}--`;
+  const url = fileId
+    ? `${UPLOAD}/files/${fileId}?uploadType=multipart&supportsAllDrives=true`
+    : `${UPLOAD}/files?uploadType=multipart&supportsAllDrives=true`;
+  const res = await fetch(url, {
+    method: fileId ? "PATCH" : "POST",
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": `multipart/related; boundary=${boundary}` },
+    body: multipart,
+  });
+  if (!res.ok) throw new Error(`Drive (salva appunti) ${res.status}: ${await res.text()}`);
+  return next;
 }

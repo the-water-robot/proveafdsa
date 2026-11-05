@@ -3,6 +3,7 @@
 // 5xx momentanei) vengono ritentati e non disturbano l'utente.
 import type { ProvaMeta } from "./band";
 import type { Ratings } from "./ratings";
+import type { MusicNote } from "./notes";
 
 export interface DriveFolder {
   id: string;
@@ -84,6 +85,7 @@ export interface FolderSummary {
   photos: number;
   videos: number;
   meta: ProvaMeta;
+  notes?: number;
 }
 
 export async function fetchSummaries(ids: string[]): Promise<FolderSummary[]> {
@@ -148,4 +150,32 @@ export async function renameDriveFile(id: string, name: string): Promise<string>
     body: JSON.stringify({ name }),
   });
   return (await jsonOrThrow(res)).name || name;
+}
+
+/* ───────── Appunti musicali ───────── */
+
+export async function fetchNotes(folder: string): Promise<MusicNote[]> {
+  return (await jsonOrThrow(await fetchRetry(`/api/notes?folder=${encodeURIComponent(folder)}`))).notes;
+}
+
+/** Salva un appunto nella prova (`folder` = id cartella, oppure `date` = YYYY-MM-DD dalla pagina Carica). */
+export async function saveNote(
+  where: { folder: string } | { date: string },
+  note: MusicNote,
+): Promise<{ notes: MusicNote[]; folder: string }> {
+  const res = await fetchRetry("/api/notes", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ...where, op: "save", note, pin: storedPin() }),
+  });
+  return jsonOrThrow(res);
+}
+
+export async function deleteNote(folder: string, id: string): Promise<MusicNote[]> {
+  const res = await fetchRetry("/api/notes", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ folder, op: "delete", id, pin: storedPin() }),
+  });
+  return (await jsonOrThrow(res)).notes;
 }

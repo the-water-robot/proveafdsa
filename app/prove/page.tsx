@@ -147,7 +147,7 @@ function FolderCard({ folder, sum, updating }: { folder: DriveFolder; sum?: Fold
     mood ? mood.label : null,
     m ? (m.present.length ? `${m.present.length} presenti` : null) : null,
   ].filter(Boolean);
-  const empty = sum && !sum.audio && !sum.photos && !sum.videos;
+  const empty = sum && !sum.audio && !sum.photos && !sum.videos && !sum.notes;
 
   return (
     <li>
@@ -169,6 +169,7 @@ function FolderCard({ folder, sum, updating }: { folder: DriveFolder; sum?: Fold
                   <Count n={sum.audio} icon="🎵" label="audio" />
                   <Count n={sum.photos} icon="📸" label="foto" />
                   <Count n={sum.videos} icon="🎬" label="video" />
+                  <Count n={sum.notes ?? 0} icon="📝" label="appunti" />
                   {sum.best > 0 && (
                     <span className="whitespace-nowrap font-semibold text-solar" aria-label={`${sum.best} da riascoltare`}>
                       ⭐ {sum.best}

@@ -6,6 +6,7 @@ import Link from "next/link";
 import AudioPlayer from "@/components/AudioPlayer";
 import MediaGrid from "@/components/MediaGrid";
 import MetaCard from "@/components/MetaCard";
+import NotesSection from "@/components/NotesSection";
 import { fetchFiles, fetchMedia, fetchMeta, type AudioFile, type MediaFile } from "@/lib/library";
 import { defaultMeta, type ProvaMeta } from "@/lib/band";
 import { prettyFolderDate } from "@/lib/format";
@@ -69,6 +70,8 @@ function ProvaDetail() {
       )}
 
       {meta && <MetaCard folderId={id} initial={meta} pinProtected={pinProtected} />}
+
+      {id && <NotesSection folderId={id} />}
 
       <section className="flex flex-col gap-2">
         <h2 className="px-1 text-sm font-semibold text-sand/70">Registrazioni</h2>
